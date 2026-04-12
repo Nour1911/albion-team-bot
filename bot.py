@@ -20,6 +20,9 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     await db.init_db()
+    # Set bot status so it appears online in sidebar
+    activity = discord.Activity(type=discord.ActivityType.playing, name="Albion Online ⚔️")
+    await bot.change_presence(status=discord.Status.online, activity=activity)
     print(f"✅ {bot.user.name} is online!")
     try:
         synced = await bot.tree.sync()
@@ -42,11 +45,10 @@ async def help_command(interaction: discord.Interaction):
         color=discord.Color.gold(),
     )
     embed.add_field(
-        name="🎭 Roles",
+        name="⚔️ Team Builder",
         value=(
-            "`/role set` - Set your role in the team\n"
-            "`/role list` - Show available roles\n"
-            "`/team` - Show current team composition"
+            "`/createteam` - Create a new team for a run\n"
+            "`/myteams` - Show your active teams"
         ),
         inline=False,
     )
@@ -62,7 +64,7 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="📊 Attendance",
         value=(
-            "React with ✅ or ❌ on event messages\n"
+            "React with role emojis on team messages to join\n"
             "`/attendance stats` - Show attendance stats\n"
             "`/attendance me` - Show your stats"
         ),
@@ -78,7 +80,7 @@ async def help_command(interaction: discord.Interaction):
 
 async def main():
     async with bot:
-        await bot.load_extension("cogs.roles")
+        await bot.load_extension("cogs.team_builder")
         await bot.load_extension("cogs.events")
         await bot.load_extension("cogs.attendance")
         await bot.start(TOKEN)
