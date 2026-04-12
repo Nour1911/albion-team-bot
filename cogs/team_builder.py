@@ -13,8 +13,59 @@ ALBION_ROLES = {
     "scout": {"emoji": "👁️", "name": "Scout", "description": "Scout/Dismounter"},
 }
 
-# Map emojis to role keys for reaction tracking
-EMOJI_TO_ROLE = {v["emoji"]: k for k, v in ALBION_ROLES.items()}
+# Content presets with max players and default compositions
+CONTENT_PRESETS = {
+    "ava_road": {
+        "name": "🛤️ Ava Road",
+        "max_players": 7,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 2, "dps_ranged": 2, "support": 1, "scout": 0},
+    },
+    "rat_static": {
+        "name": "🐀 Rat Static",
+        "max_players": 5,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "support": 1, "scout": 0},
+    },
+    "fame_farm": {
+        "name": "⭐ Fame Farm Static",
+        "max_players": 8,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 3, "dps_ranged": 2, "support": 1, "scout": 0},
+    },
+    "zvz": {
+        "name": "⚔️ ZvZ",
+        "max_players": 20,
+        "default": {"tank": 3, "healer": 4, "dps_melee": 4, "dps_ranged": 5, "support": 3, "scout": 1},
+    },
+    "gvg": {
+        "name": "🏰 GvG",
+        "max_players": 5,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "support": 1, "scout": 0},
+    },
+    "ganking": {
+        "name": "🗡️ Ganking",
+        "max_players": 10,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 3, "dps_ranged": 2, "support": 1, "scout": 2},
+    },
+    "dungeon": {
+        "name": "🏚️ Dungeon",
+        "max_players": 5,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "support": 1, "scout": 0},
+    },
+    "hce": {
+        "name": "💀 HCE",
+        "max_players": 5,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "support": 1, "scout": 0},
+    },
+    "arena": {
+        "name": "🎯 Arena / Crystal",
+        "max_players": 5,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "support": 1, "scout": 0},
+    },
+    "custom": {
+        "name": "📌 Custom",
+        "max_players": 20,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 2, "dps_ranged": 2, "support": 1, "scout": 0},
+    },
+}
 
 
 class TeamBuilderView(discord.ui.View):
@@ -24,7 +75,6 @@ class TeamBuilderView(discord.ui.View):
         super().__init__(timeout=None)
         self.team_data = team_data
 
-        # Add a button for each role that has slots
         for role_key, limit in team_data["composition"].items():
             if limit > 0:
                 role_info = ALBION_ROLES[role_key]
@@ -36,6 +86,9 @@ class TeamBuilderView(discord.ui.View):
                     team_data=team_data,
                 )
                 self.add_item(button)
+
+        # Add cancel/leave button
+        self.add_item(LeaveButton(team_data))
 
 
 class RoleButton(discord.ui.Button):
@@ -61,6 +114,7 @@ class RoleButton(discord.ui.Button):
         # Check if user is already in this role (toggle off)
         if user_id in [p["id"] for p in current_players]:
             signed[self.role_key] = [p for p in current_players if p["id"] != user_id]
+            self._update_all_buttons(signed)
             await interaction.response.edit_message(embed=build_team_embed(self.team_data), view=self.view)
             return
 
@@ -77,7 +131,41 @@ class RoleButton(discord.ui.Button):
             signed[self.role_key] = []
         signed[self.role_key].append({"id": user_id, "name": user_name})
 
-        # Update button labels
+        self._update_all_buttons(signed)
+        await interaction.response.edit_message(embed=build_team_embed(self.team_data), view=self.view)
+
+    def _update_all_buttons(self, signed):
+        for item in self.view.children:
+            if isinstance(item, RoleButton):
+                count = len(signed.get(item.role_key, []))
+                item.label = f"{ALBION_ROLES[item.role_key]['name']} ({count}/{item.limit})"
+                if count >= item.limit:
+                    item.style = discord.ButtonStyle.success
+                else:
+                    item.style = discord.ButtonStyle.secondary
+
+
+class LeaveButton(discord.ui.Button):
+    def __init__(self, team_data: dict):
+        super().__init__(style=discord.ButtonStyle.danger, emoji="🚪", label="Leave")
+        self.team_data = team_data
+
+    async def callback(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        signed = self.team_data["signed"]
+        found = False
+
+        for role, players in signed.items():
+            if user_id in [p["id"] for p in players]:
+                signed[role] = [p for p in players if p["id"] != user_id]
+                found = True
+                break
+
+        if not found:
+            await interaction.response.send_message("❌ You're not in this team!", ephemeral=True)
+            return
+
+        # Update buttons
         for item in self.view.children:
             if isinstance(item, RoleButton):
                 count = len(signed.get(item.role_key, []))
@@ -94,11 +182,23 @@ def build_team_embed(team_data: dict) -> discord.Embed:
     """Build the team composition embed."""
     total_slots = sum(team_data["composition"].values())
     total_signed = sum(len(players) for players in team_data["signed"].values())
+    max_players = team_data.get("max_players", total_slots)
+
+    if total_signed >= total_slots:
+        color = discord.Color.green()
+    elif total_signed > 0:
+        color = discord.Color.orange()
+    else:
+        color = discord.Color.gold()
 
     embed = discord.Embed(
         title=f"⚔️ {team_data['name']}",
-        description=f"**{team_data['event_type']}** | Team Size: **{total_signed}/{total_slots}**",
-        color=discord.Color.gold() if total_signed < total_slots else discord.Color.green(),
+        description=(
+            f"**{team_data['event_type']}** | "
+            f"Players: **{total_signed}/{total_slots}** | "
+            f"Max: **{max_players}**"
+        ),
+        color=color,
     )
 
     for role_key, limit in team_data["composition"].items():
@@ -106,12 +206,14 @@ def build_team_embed(team_data: dict) -> discord.Embed:
             continue
         role_info = ALBION_ROLES[role_key]
         players = team_data["signed"].get(role_key, [])
-        player_names = "\n".join(f"• {p['name']}" for p in players) if players else "*Empty*"
-        empty_slots = limit - len(players)
-        if empty_slots > 0 and players:
-            player_names += f"\n⬜ × {empty_slots} slots open"
-        elif empty_slots > 0:
-            player_names = f"⬜ × {empty_slots} slots open"
+
+        if players:
+            player_names = "\n".join(f"✅ {p['name']}" for p in players)
+            empty_slots = limit - len(players)
+            if empty_slots > 0:
+                player_names += "\n" + "\n".join(["⬜ ..." for _ in range(empty_slots)])
+        else:
+            player_names = "\n".join(["⬜ ..." for _ in range(limit)])
 
         embed.add_field(
             name=f"{role_info['emoji']} {role_info['name']} ({len(players)}/{limit})",
@@ -120,9 +222,9 @@ def build_team_embed(team_data: dict) -> discord.Embed:
         )
 
     if total_signed >= total_slots:
-        embed.set_footer(text="✅ Team is FULL! Ready to go!")
+        embed.set_footer(text="✅ Team is FULL! Ready to go! ⚔️")
     else:
-        embed.set_footer(text=f"🔽 Click a button to join | {total_slots - total_signed} slots remaining")
+        embed.set_footer(text=f"🔽 Click a role button to join | {total_slots - total_signed} slots remaining")
 
     return embed
 
@@ -166,13 +268,24 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
         required=True,
     )
 
-    def __init__(self, team_name: str, event_type: str, scout_count: int = 0):
+    def __init__(self, team_name: str, content_key: str, scout_count: int = 0):
         super().__init__()
         self.team_name = team_name
-        self.event_type = event_type
+        self.content_key = content_key
         self.scout_count = scout_count
 
+        # Set defaults from preset
+        preset = CONTENT_PRESETS.get(content_key, CONTENT_PRESETS["custom"])
+        self.tank_count.default = str(preset["default"]["tank"])
+        self.healer_count.default = str(preset["default"]["healer"])
+        self.melee_dps_count.default = str(preset["default"]["dps_melee"])
+        self.ranged_dps_count.default = str(preset["default"]["dps_ranged"])
+        self.support_count.default = str(preset["default"]["support"])
+        if scout_count == 0:
+            self.scout_count = preset["default"].get("scout", 0)
+
     async def on_submit(self, interaction: discord.Interaction):
+        preset = CONTENT_PRESETS.get(self.content_key, CONTENT_PRESETS["custom"])
         try:
             composition = {
                 "tank": int(self.tank_count.value),
@@ -187,18 +300,24 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             return
 
         total = sum(composition.values())
+        max_players = preset["max_players"]
+
         if total == 0:
             await interaction.response.send_message("❌ Team must have at least 1 slot!", ephemeral=True)
             return
-        if total > 20:
-            await interaction.response.send_message("❌ Maximum team size is 20!", ephemeral=True)
+        if total > max_players:
+            await interaction.response.send_message(
+                f"❌ {preset['name']} max is **{max_players}** players! You set {total}.",
+                ephemeral=True,
+            )
             return
 
         team_data = {
             "name": self.team_name,
-            "event_type": self.event_type,
+            "event_type": preset["name"],
             "composition": composition,
             "signed": {},
+            "max_players": max_players,
             "created_by": interaction.user.id,
         }
 
@@ -214,46 +333,57 @@ class TeamBuilder(commands.Cog):
 
     @app_commands.command(name="createteam", description="⚔️ Create a team for a run")
     @app_commands.describe(
-        name="Team/Run name (e.g., ZvZ Evening Run)",
-        event_type="Type of content",
+        name="Team/Run name (e.g., Evening Ava Roads)",
+        content="Type of content",
         scout="Number of scouts (0 if none)",
     )
     @app_commands.choices(
-        event_type=[
-            app_commands.Choice(name="⚔️ ZvZ (Zerg vs Zerg)", value="ZvZ"),
-            app_commands.Choice(name="🏰 GvG (Guild vs Guild)", value="GvG"),
-            app_commands.Choice(name="🗡️ Ganking", value="Ganking"),
-            app_commands.Choice(name="🏚️ Dungeon", value="Dungeon"),
-            app_commands.Choice(name="💀 HCE (Hardcore Expedition)", value="HCE"),
-            app_commands.Choice(name="🎯 Arena / Crystal", value="Arena"),
-            app_commands.Choice(name="📌 Other", value="Other"),
+        content=[
+            app_commands.Choice(name="🛤️ Ava Road (7 max)", value="ava_road"),
+            app_commands.Choice(name="🐀 Rat Static (5 max)", value="rat_static"),
+            app_commands.Choice(name="⭐ Fame Farm Static (8 max)", value="fame_farm"),
+            app_commands.Choice(name="⚔️ ZvZ (20 max)", value="zvz"),
+            app_commands.Choice(name="🏰 GvG (5 max)", value="gvg"),
+            app_commands.Choice(name="🗡️ Ganking (10 max)", value="ganking"),
+            app_commands.Choice(name="🏚️ Dungeon (5 max)", value="dungeon"),
+            app_commands.Choice(name="💀 HCE (5 max)", value="hce"),
+            app_commands.Choice(name="🎯 Arena / Crystal (5 max)", value="arena"),
+            app_commands.Choice(name="📌 Custom (20 max)", value="custom"),
         ]
     )
     async def createteam(
         self,
         interaction: discord.Interaction,
         name: str,
-        event_type: str,
+        content: str,
         scout: Optional[int] = 0,
     ):
-        modal = CompositionModal(team_name=name, event_type=event_type, scout_count=scout or 0)
+        modal = CompositionModal(team_name=name, content_key=content, scout_count=scout or 0)
         await interaction.response.send_modal(modal)
 
-    @app_commands.command(name="quickteam", description="⚡ Quick 7-man team (1 Tank, 1 Healer, 3 DPS, 1 Support, 1 Scout)")
-    @app_commands.describe(name="Team/Run name")
-    async def quickteam(self, interaction: discord.Interaction, name: str):
+    @app_commands.command(name="quickteam", description="⚡ Quick preset team - ready in one click!")
+    @app_commands.describe(
+        name="Team/Run name",
+        content="Type of content (uses default composition)",
+    )
+    @app_commands.choices(
+        content=[
+            app_commands.Choice(name="🛤️ Ava Road (7 players)", value="ava_road"),
+            app_commands.Choice(name="🐀 Rat Static (5 players)", value="rat_static"),
+            app_commands.Choice(name="⭐ Fame Farm (8 players)", value="fame_farm"),
+            app_commands.Choice(name="🗡️ Ganking (10 players)", value="ganking"),
+            app_commands.Choice(name="🏚️ Dungeon (5 players)", value="dungeon"),
+        ]
+    )
+    async def quickteam(self, interaction: discord.Interaction, name: str, content: str):
+        preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
+
         team_data = {
             "name": name,
-            "event_type": "Quick Team",
-            "composition": {
-                "tank": 1,
-                "healer": 1,
-                "dps_melee": 2,
-                "dps_ranged": 2,
-                "support": 1,
-                "scout": 0,
-            },
+            "event_type": preset["name"],
+            "composition": preset["default"].copy(),
             "signed": {},
+            "max_players": preset["max_players"],
             "created_by": interaction.user.id,
         }
 
