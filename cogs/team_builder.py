@@ -1,8 +1,9 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+import time as time_module
 import database as db
 
 # Default Albion Online roles
@@ -83,17 +84,6 @@ async def get_guild_roles(guild_id: int) -> dict:
     return roles
 
 
-def get_guild_emoji(guild: discord.Guild, emoji_str: str):
-    """Try to find a custom emoji in the guild, fallback to the string."""
-    if emoji_str.startswith("<") or len(emoji_str) <= 2:
-        return emoji_str
-    # Check if it's a custom emoji name (without < >)
-    for e in guild.emojis:
-        if e.name == emoji_str:
-            return str(e)
-    return emoji_str
-
-
 class TeamBuilderView(discord.ui.View):
     """Persistent view with buttons for joining team roles."""
 
@@ -105,21 +95,33 @@ class TeamBuilderView(discord.ui.View):
         for role_key, limit in team_data["composition"].items():
             if limit > 0 and role_key in roles:
                 role_info = roles[role_key]
-                button = RoleButton(
-                    role_key=role_key,
-                    emoji=role_info["emoji"],
-                    label=f"{role_info['name']} (0/{limit})",
-                    limit=limit,
-                    team_data=team_data,
-                    roles=roles,
-                )
+                emoji_str = role_info["emoji"]
+                # Try to use emoji, skip if invalid
+                try:
+                    button = RoleButton(
+                        role_key=role_key,
+                        emoji=emoji_str,
+                        label=f"{role_info['name']} (0/{limit})",
+                        limit=limit,
+                        team_data=team_data,
+                        roles=roles,
+                    )
+                except Exception:
+                    button = RoleButton(
+                        role_key=role_key,
+                        emoji=None,
+                        label=f"{role_info['name']} (0/{limit})",
+                        limit=limit,
+                        team_data=team_data,
+                        roles=roles,
+                    )
                 self.add_item(button)
 
         self.add_item(LeaveButton(team_data, roles))
 
 
 class RoleButton(discord.ui.Button):
-    def __init__(self, role_key: str, emoji: str, label: str, limit: int, team_data: dict, roles: dict):
+    def __init__(self, role_key: str, emoji, label: str, limit: int, team_data: dict, roles: dict):
         super().__init__(style=discord.ButtonStyle.secondary, emoji=emoji, label=label)
         self.role_key = role_key
         self.limit = limit
@@ -127,6 +129,12 @@ class RoleButton(discord.ui.Button):
         self.roles = roles
 
     async def callback(self, interaction: discord.Interaction):
+        # Check if registration is closed
+        close_ts = self.team_data.get("close_timestamp")
+        if close_ts and time_module.time() >= close_ts:
+            await interaction.response.send_message("🔒 Registration is closed!", ephemeral=True)
+            return
+
         user_id = interaction.user.id
         user_name = interaction.user.display_name
         signed = self.team_data["signed"]
@@ -184,6 +192,11 @@ class LeaveButton(discord.ui.Button):
         self.roles = roles
 
     async def callback(self, interaction: discord.Interaction):
+        close_ts = self.team_data.get("close_timestamp")
+        if close_ts and time_module.time() >= close_ts:
+            await interaction.response.send_message("🔒 Registration is closed!", ephemeral=True)
+            return
+
         user_id = interaction.user.id
         signed = self.team_data["signed"]
         found = False
@@ -218,7 +231,13 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
     total_signed = sum(len(players) for players in team_data["signed"].values())
     max_players = team_data.get("max_players", total_slots)
 
-    if total_signed >= total_slots:
+    # Check if closed
+    close_ts = team_data.get("close_timestamp")
+    is_closed = close_ts and time_module.time() >= close_ts
+
+    if is_closed:
+        color = discord.Color.red()
+    elif total_signed >= total_slots:
         color = discord.Color.green()
     elif total_signed > 0:
         color = discord.Color.orange()
@@ -235,13 +254,16 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
         f"**{team_data['event_type']}** | Players: **{total_signed}/{total_slots}**"
     ]
 
-    time_str = team_data.get("time")
-    close_str = team_data.get("close_time")
+    start_ts = team_data.get("start_timestamp")
+    if start_ts:
+        # Discord timestamp format - shows countdown automatically
+        desc_parts.append(f"⏰ **Start:** <t:{int(start_ts)}:t> (<t:{int(start_ts)}:R>)")
 
-    if time_str:
-        desc_parts.append(f"⏰ **Start:** {time_str}")
-    if close_str:
-        desc_parts.append(f"🔒 **Closes:** {close_str}")
+    if close_ts:
+        if is_closed:
+            desc_parts.append("🔒 **Registration: CLOSED**")
+        else:
+            desc_parts.append(f"🔒 **Closes:** <t:{int(close_ts)}:t> (<t:{int(close_ts)}:R>)")
 
     embed.description = "\n".join(desc_parts)
 
@@ -265,7 +287,9 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
             inline=True,
         )
 
-    if total_signed >= total_slots:
+    if is_closed:
+        embed.set_footer(text="🔒 Registration is CLOSED")
+    elif total_signed >= total_slots:
         embed.set_footer(text="✅ Team is FULL! Ready to go! ⚔️")
     else:
         embed.set_footer(text=f"🔽 Click a role button to join | {total_slots - total_signed} slots remaining")
@@ -283,15 +307,15 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
     support_count = discord.ui.TextInput(label="Support", placeholder="0", default="1", max_length=2, required=True)
 
     def __init__(self, team_name: str, content_key: str, guild_id: int, roles: dict,
-                 scout_count: int = 0, time_str: str = None, close_time: str = None):
+                 scout_count: int = 0, hours_to_close: float = 0, start_time: str = None):
         super().__init__()
         self.team_name = team_name
         self.content_key = content_key
         self.guild_id = guild_id
         self.all_roles = roles
         self.scout_count = scout_count
-        self.time_str = time_str
-        self.close_time = close_time
+        self.hours_to_close = hours_to_close
+        self.start_time = start_time
 
         # Update labels with custom role names
         self.tank_count.label = f"{roles['tank']['emoji']} {roles['tank']['name']}"
@@ -343,6 +367,30 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             )
             return
 
+        # Calculate timestamps
+        now = time_module.time()
+        close_timestamp = None
+        start_timestamp = None
+
+        if self.hours_to_close and self.hours_to_close > 0:
+            close_timestamp = now + (self.hours_to_close * 3600)
+
+        if self.start_time:
+            try:
+                # Parse HH:MM format
+                parts = self.start_time.replace(" ", "").upper()
+                today = datetime.now()
+                if "PM" in parts or "AM" in parts:
+                    t = datetime.strptime(parts, "%I:%M%p").time()
+                else:
+                    t = datetime.strptime(parts, "%H:%M").time()
+                start_dt = datetime.combine(today.date(), t)
+                if start_dt < today:
+                    start_dt += timedelta(days=1)
+                start_timestamp = start_dt.timestamp()
+            except ValueError:
+                pass
+
         team_data = {
             "name": self.team_name,
             "event_type": preset["name"],
@@ -350,8 +398,8 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             "signed": {},
             "max_players": max_players,
             "created_by": interaction.user.id,
-            "time": self.time_str,
-            "close_time": self.close_time,
+            "close_timestamp": close_timestamp,
+            "start_timestamp": start_timestamp,
         }
 
         embed = build_team_embed(team_data, self.all_roles)
@@ -371,7 +419,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         key="Unique key for this role (lowercase, no spaces, e.g. battlemount)",
         name="Display name (e.g. Battlemount, Locus, Grailseeker)",
-        emoji="Emoji for this role (e.g. 🐎 or custom server emoji)",
+        emoji="Emoji for this role - use a standard emoji or type custom emoji from server",
         description="Optional description",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -407,14 +455,15 @@ class TeamBuilder(commands.Cog):
         default_text = ""
         custom_text = ""
 
+        custom_roles = await db.get_custom_roles(interaction.guild_id)
+        custom_keys = {r["role_key"] for r in custom_roles}
+
         for key, info in roles.items():
             line = f"{info['emoji']} **{info['name']}** (`{key}`)"
             if info.get("description"):
                 line += f"\n  ↳ {info['description']}"
             if key in DEFAULT_ROLES:
-                custom_roles = await db.get_custom_roles(interaction.guild_id)
-                customized = any(r["role_key"] == key for r in custom_roles)
-                if customized:
+                if key in custom_keys:
                     line += " ✏️"
                 default_text += line + "\n"
             else:
@@ -427,29 +476,25 @@ class TeamBuilder(commands.Cog):
         embed.set_footer(text="✏️ = customized | Use /role add to add/edit, /role remove to delete")
         await interaction.response.send_message(embed=embed)
 
-    @role_mgmt.command(name="emoji", description="🎨 Change emoji for a role using server emoji")
+    @role_mgmt.command(name="emoji", description="🎨 Change emoji for a role")
     @app_commands.describe(
-        key="Role key to update",
-        emoji="The new emoji (use server custom emoji or standard emoji)",
+        key="Role key to update (e.g. tank, healer, dps_melee)",
+        emoji="The new emoji - paste any emoji here",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
     async def role_emoji(self, interaction: discord.Interaction, key: str, emoji: str):
         key = key.lower().replace(" ", "_")
         roles = await get_guild_roles(interaction.guild_id)
         if key not in roles:
-            await interaction.response.send_message(f"❌ Role `{key}` not found!", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Role `{key}` not found!\nAvailable: {', '.join(f'`{k}`' for k in roles.keys())}",
+                ephemeral=True,
+            )
             return
 
         role_info = roles[key]
         await db.add_custom_role(interaction.guild_id, key, role_info["name"], emoji, role_info.get("description", ""))
         await interaction.response.send_message(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
-
-    # --- Emoji Upload Command ---
-
-    @app_commands.command(name="uploademojis", description="📤 Upload Albion emojis to this server")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def upload_emojis(self, interaction: discord.Interaction):
-        await interaction.response.send_message("📤 Upload emoji images using `/emoji upload` with the image attached.\nOr upload them manually in Server Settings > Emoji.")
 
     # --- Team Commands ---
 
@@ -457,8 +502,8 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         name="Team/Run name (e.g., Evening Ava Roads)",
         content="Type of content",
-        time="Start time (e.g., 8:00 PM or 20:00)",
-        close_time="Registration closes at (e.g., 7:30 PM or 19:30)",
+        start_time="Start time (e.g., 8:00PM or 20:00)",
+        close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
         scout="Number of scouts (0 if none)",
     )
     @app_commands.choices(
@@ -480,8 +525,8 @@ class TeamBuilder(commands.Cog):
         interaction: discord.Interaction,
         name: str,
         content: str,
-        time: Optional[str] = None,
-        close_time: Optional[str] = None,
+        start_time: Optional[str] = None,
+        close_after: Optional[float] = None,
         scout: Optional[int] = 0,
     ):
         roles = await get_guild_roles(interaction.guild_id)
@@ -491,8 +536,8 @@ class TeamBuilder(commands.Cog):
             guild_id=interaction.guild_id,
             roles=roles,
             scout_count=scout or 0,
-            time_str=time,
-            close_time=close_time,
+            hours_to_close=close_after or 0,
+            start_time=start_time,
         )
         await interaction.response.send_modal(modal)
 
@@ -500,8 +545,8 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         name="Team/Run name",
         content="Type of content (uses default composition)",
-        time="Start time (e.g., 8:00 PM or 20:00)",
-        close_time="Registration closes at (e.g., 7:30 PM or 19:30)",
+        start_time="Start time (e.g., 8:00PM or 20:00)",
+        close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
     )
     @app_commands.choices(
         content=[
@@ -513,9 +558,31 @@ class TeamBuilder(commands.Cog):
         ]
     )
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
-                        time: Optional[str] = None, close_time: Optional[str] = None):
+                        start_time: Optional[str] = None, close_after: Optional[float] = None):
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
         roles = await get_guild_roles(interaction.guild_id)
+
+        now = time_module.time()
+        close_timestamp = None
+        start_timestamp = None
+
+        if close_after and close_after > 0:
+            close_timestamp = now + (close_after * 3600)
+
+        if start_time:
+            try:
+                parts = start_time.replace(" ", "").upper()
+                today = datetime.now()
+                if "PM" in parts or "AM" in parts:
+                    t = datetime.strptime(parts, "%I:%M%p").time()
+                else:
+                    t = datetime.strptime(parts, "%H:%M").time()
+                start_dt = datetime.combine(today.date(), t)
+                if start_dt < today:
+                    start_dt += timedelta(days=1)
+                start_timestamp = start_dt.timestamp()
+            except ValueError:
+                pass
 
         team_data = {
             "name": name,
@@ -524,8 +591,8 @@ class TeamBuilder(commands.Cog):
             "signed": {},
             "max_players": preset["max_players"],
             "created_by": interaction.user.id,
-            "time": time,
-            "close_time": close_time,
+            "close_timestamp": close_timestamp,
+            "start_timestamp": start_timestamp,
         }
 
         embed = build_team_embed(team_data, roles)
