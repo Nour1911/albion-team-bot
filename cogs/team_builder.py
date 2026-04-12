@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Optional
+from datetime import datetime
 import database as db
 
 # Default Albion Online roles
@@ -80,6 +81,17 @@ async def get_guild_roles(guild_id: int) -> dict:
             "description": r["description"] or "",
         }
     return roles
+
+
+def get_guild_emoji(guild: discord.Guild, emoji_str: str):
+    """Try to find a custom emoji in the guild, fallback to the string."""
+    if emoji_str.startswith("<") or len(emoji_str) <= 2:
+        return emoji_str
+    # Check if it's a custom emoji name (without < >)
+    for e in guild.emojis:
+        if e.name == emoji_str:
+            return str(e)
+    return emoji_str
 
 
 class TeamBuilderView(discord.ui.View):
@@ -215,13 +227,23 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
 
     embed = discord.Embed(
         title=f"⚔️ {team_data['name']}",
-        description=(
-            f"**{team_data['event_type']}** | "
-            f"Players: **{total_signed}/{total_slots}** | "
-            f"Max: **{max_players}**"
-        ),
         color=color,
     )
+
+    # Build description with time info
+    desc_parts = [
+        f"**{team_data['event_type']}** | Players: **{total_signed}/{total_slots}**"
+    ]
+
+    time_str = team_data.get("time")
+    close_str = team_data.get("close_time")
+
+    if time_str:
+        desc_parts.append(f"⏰ **Start:** {time_str}")
+    if close_str:
+        desc_parts.append(f"🔒 **Closes:** {close_str}")
+
+    embed.description = "\n".join(desc_parts)
 
     for role_key, limit in team_data["composition"].items():
         if limit <= 0 or role_key not in roles:
@@ -260,13 +282,16 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
     ranged_dps_count = discord.ui.TextInput(label="Ranged DPS", placeholder="0", default="2", max_length=2, required=True)
     support_count = discord.ui.TextInput(label="Support", placeholder="0", default="1", max_length=2, required=True)
 
-    def __init__(self, team_name: str, content_key: str, guild_id: int, roles: dict, scout_count: int = 0):
+    def __init__(self, team_name: str, content_key: str, guild_id: int, roles: dict,
+                 scout_count: int = 0, time_str: str = None, close_time: str = None):
         super().__init__()
         self.team_name = team_name
         self.content_key = content_key
         self.guild_id = guild_id
         self.all_roles = roles
         self.scout_count = scout_count
+        self.time_str = time_str
+        self.close_time = close_time
 
         # Update labels with custom role names
         self.tank_count.label = f"{roles['tank']['emoji']} {roles['tank']['name']}"
@@ -325,11 +350,13 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             "signed": {},
             "max_players": max_players,
             "created_by": interaction.user.id,
+            "time": self.time_str,
+            "close_time": self.close_time,
         }
 
         embed = build_team_embed(team_data, self.all_roles)
         view = TeamBuilderView(team_data, self.all_roles)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(content="@everyone", embed=embed, view=view)
 
 
 class TeamBuilder(commands.Cog):
@@ -344,7 +371,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         key="Unique key for this role (lowercase, no spaces, e.g. battlemount)",
         name="Display name (e.g. Battlemount, Locus, Grailseeker)",
-        emoji="Emoji for this role (e.g. 🐎, 🔥, ❄️)",
+        emoji="Emoji for this role (e.g. 🐎 or custom server emoji)",
         description="Optional description",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -385,7 +412,6 @@ class TeamBuilder(commands.Cog):
             if info.get("description"):
                 line += f"\n  ↳ {info['description']}"
             if key in DEFAULT_ROLES:
-                # Check if it was customized
                 custom_roles = await db.get_custom_roles(interaction.guild_id)
                 customized = any(r["role_key"] == key for r in custom_roles)
                 if customized:
@@ -401,12 +427,38 @@ class TeamBuilder(commands.Cog):
         embed.set_footer(text="✏️ = customized | Use /role add to add/edit, /role remove to delete")
         await interaction.response.send_message(embed=embed)
 
+    @role_mgmt.command(name="emoji", description="🎨 Change emoji for a role using server emoji")
+    @app_commands.describe(
+        key="Role key to update",
+        emoji="The new emoji (use server custom emoji or standard emoji)",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def role_emoji(self, interaction: discord.Interaction, key: str, emoji: str):
+        key = key.lower().replace(" ", "_")
+        roles = await get_guild_roles(interaction.guild_id)
+        if key not in roles:
+            await interaction.response.send_message(f"❌ Role `{key}` not found!", ephemeral=True)
+            return
+
+        role_info = roles[key]
+        await db.add_custom_role(interaction.guild_id, key, role_info["name"], emoji, role_info.get("description", ""))
+        await interaction.response.send_message(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
+
+    # --- Emoji Upload Command ---
+
+    @app_commands.command(name="uploademojis", description="📤 Upload Albion emojis to this server")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def upload_emojis(self, interaction: discord.Interaction):
+        await interaction.response.send_message("📤 Upload emoji images using `/emoji upload` with the image attached.\nOr upload them manually in Server Settings > Emoji.")
+
     # --- Team Commands ---
 
     @app_commands.command(name="createteam", description="⚔️ Create a team for a run")
     @app_commands.describe(
         name="Team/Run name (e.g., Evening Ava Roads)",
         content="Type of content",
+        time="Start time (e.g., 8:00 PM or 20:00)",
+        close_time="Registration closes at (e.g., 7:30 PM or 19:30)",
         scout="Number of scouts (0 if none)",
     )
     @app_commands.choices(
@@ -428,6 +480,8 @@ class TeamBuilder(commands.Cog):
         interaction: discord.Interaction,
         name: str,
         content: str,
+        time: Optional[str] = None,
+        close_time: Optional[str] = None,
         scout: Optional[int] = 0,
     ):
         roles = await get_guild_roles(interaction.guild_id)
@@ -437,6 +491,8 @@ class TeamBuilder(commands.Cog):
             guild_id=interaction.guild_id,
             roles=roles,
             scout_count=scout or 0,
+            time_str=time,
+            close_time=close_time,
         )
         await interaction.response.send_modal(modal)
 
@@ -444,6 +500,8 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         name="Team/Run name",
         content="Type of content (uses default composition)",
+        time="Start time (e.g., 8:00 PM or 20:00)",
+        close_time="Registration closes at (e.g., 7:30 PM or 19:30)",
     )
     @app_commands.choices(
         content=[
@@ -454,7 +512,8 @@ class TeamBuilder(commands.Cog):
             app_commands.Choice(name="🏚️ Dungeon (5 players)", value="dungeon"),
         ]
     )
-    async def quickteam(self, interaction: discord.Interaction, name: str, content: str):
+    async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
+                        time: Optional[str] = None, close_time: Optional[str] = None):
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
         roles = await get_guild_roles(interaction.guild_id)
 
@@ -465,11 +524,13 @@ class TeamBuilder(commands.Cog):
             "signed": {},
             "max_players": preset["max_players"],
             "created_by": interaction.user.id,
+            "time": time,
+            "close_time": close_time,
         }
 
         embed = build_team_embed(team_data, roles)
         view = TeamBuilderView(team_data, roles)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(content="@everyone", embed=embed, view=view)
 
 
 async def setup(bot):
