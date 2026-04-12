@@ -37,7 +37,50 @@ async def init_db():
                 UNIQUE(event_id, player_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS custom_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                role_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                UNIQUE(guild_id, role_key)
+            )
+        """)
         await db.commit()
+
+
+# --- Custom Roles ---
+
+async def add_custom_role(guild_id: int, role_key: str, name: str, emoji: str, description: str = ""):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO custom_roles (guild_id, role_key, name, emoji, description)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(guild_id, role_key) DO UPDATE SET name = ?, emoji = ?, description = ?""",
+            (guild_id, role_key, name, emoji, description, name, emoji, description),
+        )
+        await db.commit()
+
+
+async def remove_custom_role(guild_id: int, role_key: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM custom_roles WHERE guild_id = ? AND role_key = ?",
+            (guild_id, role_key),
+        )
+        await db.commit()
+
+
+async def get_custom_roles(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM custom_roles WHERE guild_id = ? ORDER BY id",
+            (guild_id,),
+        ) as cursor:
+            return await cursor.fetchall()
 
 
 # --- Players ---
