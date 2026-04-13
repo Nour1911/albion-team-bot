@@ -298,74 +298,121 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
 
 
 class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
-    """Modal to set how many of each role."""
+    """Modal to set role names and counts. Format: name:count per line."""
 
-    tank_count = discord.ui.TextInput(label="Tank", placeholder="0", default="1", max_length=2, required=True)
-    healer_count = discord.ui.TextInput(label="Healer", placeholder="0", default="1", max_length=2, required=True)
-    melee_dps_count = discord.ui.TextInput(label="Melee DPS", placeholder="0", default="2", max_length=2, required=True)
-    ranged_dps_count = discord.ui.TextInput(label="Ranged DPS", placeholder="0", default="2", max_length=2, required=True)
-    support_count = discord.ui.TextInput(label="Support", placeholder="0", default="1", max_length=2, required=True)
+    # Each field: "RoleName : Count" - user can change the name!
+    slot1 = discord.ui.TextInput(label="Role 1", placeholder="Tank : 1", default="Tank : 1", max_length=50, required=True)
+    slot2 = discord.ui.TextInput(label="Role 2", placeholder="Healer : 1", default="Healer : 1", max_length=50, required=True)
+    slot3 = discord.ui.TextInput(label="Role 3", placeholder="Melee DPS : 2", default="Melee DPS : 2", max_length=50, required=True)
+    slot4 = discord.ui.TextInput(label="Role 4", placeholder="Ranged DPS : 2", default="Ranged DPS : 2", max_length=50, required=True)
+    slot5 = discord.ui.TextInput(label="Role 5 (extra roles: one per line)", placeholder="Support : 1\nScout : 1", default="Support : 1", max_length=200, required=False, style=discord.TextStyle.paragraph)
 
     def __init__(self, team_name: str, content_key: str, guild_id: int, roles: dict,
-                 scout_count: int = 0, hours_to_close: float = 0, start_time: str = None):
+                 hours_to_close: float = 0, start_time: str = None):
         super().__init__()
         self.team_name = team_name
         self.content_key = content_key
         self.guild_id = guild_id
         self.all_roles = roles
-        self.scout_count = scout_count
         self.hours_to_close = hours_to_close
         self.start_time = start_time
 
-        # Update labels with custom role names
-        self.tank_count.label = f"{roles['tank']['emoji']} {roles['tank']['name']}"
-        self.healer_count.label = f"{roles['healer']['emoji']} {roles['healer']['name']}"
-        self.melee_dps_count.label = f"{roles['dps_melee']['emoji']} {roles['dps_melee']['name']}"
-        self.ranged_dps_count.label = f"{roles['dps_ranged']['emoji']} {roles['dps_ranged']['name']}"
-        self.support_count.label = f"{roles['support']['emoji']} {roles['support']['name']}"
-
-        # Set defaults from preset
         preset = CONTENT_PRESETS.get(content_key, CONTENT_PRESETS["custom"])
-        self.tank_count.default = str(preset["default"]["tank"])
-        self.healer_count.default = str(preset["default"]["healer"])
-        self.melee_dps_count.default = str(preset["default"]["dps_melee"])
-        self.ranged_dps_count.default = str(preset["default"]["dps_ranged"])
-        self.support_count.default = str(preset["default"]["support"])
-        if scout_count == 0:
-            self.scout_count = preset["default"].get("scout", 0)
+        defaults = preset["default"]
+
+        # Set defaults with role names from guild config
+        self.slot1.default = f"{roles['tank']['name']} : {defaults['tank']}"
+        self.slot1.label = f"{roles['tank']['emoji']} Role 1"
+        self.slot2.default = f"{roles['healer']['name']} : {defaults['healer']}"
+        self.slot2.label = f"{roles['healer']['emoji']} Role 2"
+        self.slot3.default = f"{roles['dps_melee']['name']} : {defaults['dps_melee']}"
+        self.slot3.label = f"{roles['dps_melee']['emoji']} Role 3"
+        self.slot4.default = f"{roles['dps_ranged']['name']} : {defaults['dps_ranged']}"
+        self.slot4.label = f"{roles['dps_ranged']['emoji']} Role 4"
+
+        # Slot 5: support + scout + any extra
+        extra_lines = []
+        if defaults.get("support", 0) > 0:
+            extra_lines.append(f"{roles['support']['name']} : {defaults['support']}")
+        if defaults.get("scout", 0) > 0:
+            extra_lines.append(f"{roles['scout']['name']} : {defaults['scout']}")
+        self.slot5.default = "\n".join(extra_lines) if extra_lines else f"{roles['support']['name']} : 1"
+        self.slot5.label = "📋 More roles (one per line)"
+        self.slot5.placeholder = "Support : 1\nScout : 2\nBattlemount : 1"
+
+    def _parse_slot(self, value: str) -> list:
+        """Parse 'RoleName : Count' format. Returns list of (name, count)."""
+        results = []
+        for line in value.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                parts = line.rsplit(":", 1)
+                name = parts[0].strip()
+                try:
+                    count = int(parts[1].strip())
+                except ValueError:
+                    count = 0
+            else:
+                # Just a name, default count 1
+                name = line.strip()
+                count = 1
+            if name and count > 0:
+                results.append((name, count))
+        return results
 
     async def on_submit(self, interaction: discord.Interaction):
         preset = CONTENT_PRESETS.get(self.content_key, CONTENT_PRESETS["custom"])
-        try:
-            composition = {
-                "tank": int(self.tank_count.value),
-                "healer": int(self.healer_count.value),
-                "dps_melee": int(self.melee_dps_count.value),
-                "dps_ranged": int(self.ranged_dps_count.value),
-                "support": int(self.support_count.value),
-                "scout": self.scout_count,
-            }
-        except ValueError:
-            await interaction.response.send_message("❌ Please enter numbers only!", ephemeral=True)
+
+        # Parse all slots
+        all_roles_parsed = []
+        for slot_value in [self.slot1.value, self.slot2.value, self.slot3.value, self.slot4.value]:
+            parsed = self._parse_slot(slot_value)
+            all_roles_parsed.extend(parsed)
+
+        if self.slot5.value and self.slot5.value.strip():
+            all_roles_parsed.extend(self._parse_slot(self.slot5.value))
+
+        if not all_roles_parsed:
+            await interaction.response.send_message("❌ Team must have at least 1 role!", ephemeral=True)
             return
 
-        # Add custom roles with 0 default
-        for role_key in self.all_roles:
-            if role_key not in composition:
-                composition[role_key] = 0
-
-        total = sum(composition.values())
-        max_players = preset["max_players"]
-
-        if total == 0:
-            await interaction.response.send_message("❌ Team must have at least 1 slot!", ephemeral=True)
+        total = sum(count for _, count in all_roles_parsed)
+        if total > 50:
+            await interaction.response.send_message("❌ Max 50 players!", ephemeral=True)
             return
-        if total > max_players:
-            await interaction.response.send_message(
-                f"❌ {preset['name']} max is **{max_players}** players! You set {total}.",
-                ephemeral=True,
-            )
-            return
+
+        # Build composition and custom role names
+        composition = {}
+        role_display = {}
+        existing_roles = self.all_roles
+
+        for i, (name, count) in enumerate(all_roles_parsed):
+            # Find matching role key or create a custom one
+            role_key = None
+            for key, info in existing_roles.items():
+                if info["name"].lower() == name.lower():
+                    role_key = key
+                    break
+
+            if not role_key:
+                role_key = f"custom_{i}_{name.lower().replace(' ', '_')[:20]}"
+
+            composition[role_key] = count
+            # Use existing emoji if found, otherwise default
+            if role_key in existing_roles:
+                role_display[role_key] = {
+                    "emoji": existing_roles[role_key]["emoji"],
+                    "name": name,
+                    "description": "",
+                }
+            else:
+                role_display[role_key] = {
+                    "emoji": "🎮",
+                    "name": name,
+                    "description": "",
+                }
 
         # Calculate timestamps
         now = time_module.time()
@@ -377,7 +424,6 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
 
         if self.start_time:
             try:
-                # Parse HH:MM format
                 parts = self.start_time.replace(" ", "").upper()
                 today = datetime.now()
                 if "PM" in parts or "AM" in parts:
@@ -396,14 +442,14 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             "event_type": preset["name"],
             "composition": composition,
             "signed": {},
-            "max_players": max_players,
+            "max_players": total,
             "created_by": interaction.user.id,
             "close_timestamp": close_timestamp,
             "start_timestamp": start_timestamp,
         }
 
-        embed = build_team_embed(team_data, self.all_roles)
-        view = TeamBuilderView(team_data, self.all_roles)
+        embed = build_team_embed(team_data, role_display)
+        view = TeamBuilderView(team_data, role_display)
         await interaction.response.send_message(content="@everyone", embed=embed, view=view)
 
 
@@ -504,20 +550,19 @@ class TeamBuilder(commands.Cog):
         content="Type of content",
         start_time="Start time (e.g., 8:00PM or 20:00)",
         close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
-        scout="Number of scouts (0 if none)",
     )
     @app_commands.choices(
         content=[
-            app_commands.Choice(name="🛤️ Ava Road (7 max)", value="ava_road"),
-            app_commands.Choice(name="🐀 Rat Static (5 max)", value="rat_static"),
-            app_commands.Choice(name="⭐ Fame Farm Static (8 max)", value="fame_farm"),
-            app_commands.Choice(name="⚔️ ZvZ (20 max)", value="zvz"),
-            app_commands.Choice(name="🏰 GvG (5 max)", value="gvg"),
-            app_commands.Choice(name="🗡️ Ganking (10 max)", value="ganking"),
-            app_commands.Choice(name="🏚️ Dungeon (5 max)", value="dungeon"),
-            app_commands.Choice(name="💀 HCE (5 max)", value="hce"),
-            app_commands.Choice(name="🎯 Arena / Crystal (5 max)", value="arena"),
-            app_commands.Choice(name="📌 Custom (20 max)", value="custom"),
+            app_commands.Choice(name="🛤️ Ava Road", value="ava_road"),
+            app_commands.Choice(name="🐀 Rat Static", value="rat_static"),
+            app_commands.Choice(name="⭐ Fame Farm Static", value="fame_farm"),
+            app_commands.Choice(name="⚔️ ZvZ", value="zvz"),
+            app_commands.Choice(name="🏰 GvG", value="gvg"),
+            app_commands.Choice(name="🗡️ Ganking", value="ganking"),
+            app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
+            app_commands.Choice(name="💀 HCE", value="hce"),
+            app_commands.Choice(name="🎯 Arena / Crystal", value="arena"),
+            app_commands.Choice(name="📌 Custom", value="custom"),
         ]
     )
     async def createteam(
@@ -527,7 +572,6 @@ class TeamBuilder(commands.Cog):
         content: str,
         start_time: Optional[str] = None,
         close_after: Optional[float] = None,
-        scout: Optional[int] = 0,
     ):
         roles = await get_guild_roles(interaction.guild_id)
         modal = CompositionModal(
@@ -535,7 +579,6 @@ class TeamBuilder(commands.Cog):
             content_key=content,
             guild_id=interaction.guild_id,
             roles=roles,
-            scout_count=scout or 0,
             hours_to_close=close_after or 0,
             start_time=start_time,
         )
@@ -550,11 +593,11 @@ class TeamBuilder(commands.Cog):
     )
     @app_commands.choices(
         content=[
-            app_commands.Choice(name="🛤️ Ava Road (7 players)", value="ava_road"),
-            app_commands.Choice(name="🐀 Rat Static (5 players)", value="rat_static"),
-            app_commands.Choice(name="⭐ Fame Farm (8 players)", value="fame_farm"),
-            app_commands.Choice(name="🗡️ Ganking (10 players)", value="ganking"),
-            app_commands.Choice(name="🏚️ Dungeon (5 players)", value="dungeon"),
+            app_commands.Choice(name="🛤️ Ava Road", value="ava_road"),
+            app_commands.Choice(name="🐀 Rat Static", value="rat_static"),
+            app_commands.Choice(name="⭐ Fame Farm", value="fame_farm"),
+            app_commands.Choice(name="🗡️ Ganking", value="ganking"),
+            app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
         ]
     )
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
