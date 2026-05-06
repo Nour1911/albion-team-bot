@@ -4,6 +4,7 @@ from discord.ext import commands, tasks
 from typing import Optional
 from datetime import datetime, timedelta
 import time as time_module
+import os
 import database as db
 
 # Default Albion Online roles
@@ -15,6 +16,23 @@ DEFAULT_ROLES = {
     "support": {"emoji": "🔮", "name": "Support", "description": "Support/Utility (Arcane, Curse)"},
     "scout": {"emoji": "👁️", "name": "Scout", "description": "Scout/Dismounter"},
 }
+
+# AVA RAID specific roles - keys match image filenames
+AVA_RAID_ROLES = {
+    "main_tank": {"emoji": "🛡️", "name": "Main TANK", "image": "Main TANK.png"},
+    "off_tank_mace": {"emoji": "🔨", "name": "OFF TANK MACE", "image": "OFF_TANK_MACE_.png"},
+    "main_heal": {"emoji": "💚", "name": "MAIN HEAL", "image": "MAIN_HEAL.png"},
+    "main_holystaff": {"emoji": "✝️", "name": "MAIN HOLYSTAFF", "image": "MAIN_HOLYSTAFF.png"},
+    "blazing_dps": {"emoji": "🔥", "name": "Blazing DPS", "image": "Blazing DPS.png"},
+    "arctic_dps": {"emoji": "❄️", "name": "ARCTIC DPS", "image": "ARCTIC DPS.png"},
+    "ligt_cl_dps": {"emoji": "⚡", "name": "Ligt CL DPS", "image": "Ligt CL DPS.png"},
+    "sadwo_cl_dps": {"emoji": "🌑", "name": "Sadwo CL DPS", "image": "Sadwo CL DPS.png"},
+    "weeping": {"emoji": "💧", "name": "Weeping", "image": "Weeping.png"},
+    "shapeshifter_crystal": {"emoji": "💎", "name": "SHAPESHIFTER CRYSTAL", "image": "_SHAPESHIFTER_CRYSTAL.png"},
+}
+
+# Path to AVA RAID emoji images
+AVA_RAID_IMAGES_PATH = os.path.join(os.path.dirname(__file__), "..", "emoji_images", "ava_raid")
 
 # Content presets
 CONTENT_PRESETS = {
@@ -63,6 +81,16 @@ CONTENT_PRESETS = {
         "max_players": 5,
         "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "support": 1, "scout": 0},
     },
+    "ava_raid": {
+        "name": "⚔️ AVA RAID",
+        "max_players": 10,
+        "default": {
+            "main_tank": 1, "off_tank_mace": 1, "main_heal": 1, "main_holystaff": 1,
+            "blazing_dps": 1, "arctic_dps": 1, "ligt_cl_dps": 1, "sadwo_cl_dps": 1,
+            "weeping": 1, "shapeshifter_crystal": 1,
+        },
+        "custom_roles": True,
+    },
     "custom": {
         "name": "📌 Custom",
         "max_players": 20,
@@ -71,9 +99,13 @@ CONTENT_PRESETS = {
 }
 
 
-async def get_guild_roles(guild_id: int) -> dict:
+async def get_guild_roles(guild_id: int, content_key: str = None) -> dict:
     """Get roles for a guild - custom roles merged with defaults."""
     roles = dict(DEFAULT_ROLES)
+    # Add AVA RAID roles
+    for key, info in AVA_RAID_ROLES.items():
+        roles[key] = {"emoji": info["emoji"], "name": info["name"], "description": ""}
+    # Override with guild custom roles from DB
     custom = await db.get_custom_roles(guild_id)
     for r in custom:
         roles[r["role_key"]] = {
@@ -81,6 +113,29 @@ async def get_guild_roles(guild_id: int) -> dict:
             "name": r["name"],
             "description": r["description"] or "",
         }
+    # Check if guild has uploaded custom emojis - use them if available
+    return roles
+
+
+async def get_guild_emoji_map(guild: discord.Guild) -> dict:
+    """Map role keys to custom Discord emojis uploaded to this guild."""
+    emoji_map = {}
+    for emoji in guild.emojis:
+        # Match emoji name to role keys (emoji names are uploaded as role keys)
+        emoji_map[emoji.name.lower()] = str(emoji)
+    return emoji_map
+
+
+async def get_roles_with_emojis(guild: discord.Guild, guild_id: int, content_key: str = None) -> dict:
+    """Get roles with custom Discord emojis if uploaded."""
+    roles = await get_guild_roles(guild_id, content_key)
+    emoji_map = await get_guild_emoji_map(guild)
+
+    for role_key in roles:
+        # Check if a custom emoji exists for this role key
+        if role_key in emoji_map:
+            roles[role_key]["emoji"] = emoji_map[role_key]
+
     return roles
 
 
@@ -320,24 +375,33 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
         preset = CONTENT_PRESETS.get(content_key, CONTENT_PRESETS["custom"])
         defaults = preset["default"]
 
-        # Set defaults with role names from guild config
-        self.slot1.default = f"{roles['tank']['name']} : {defaults['tank']}"
-        self.slot1.label = f"{roles['tank']['emoji']} Role 1"
-        self.slot2.default = f"{roles['healer']['name']} : {defaults['healer']}"
-        self.slot2.label = f"{roles['healer']['emoji']} Role 2"
-        self.slot3.default = f"{roles['dps_melee']['name']} : {defaults['dps_melee']}"
-        self.slot3.label = f"{roles['dps_melee']['emoji']} Role 3"
-        self.slot4.default = f"{roles['dps_ranged']['name']} : {defaults['dps_ranged']}"
-        self.slot4.label = f"{roles['dps_ranged']['emoji']} Role 4"
+        # Build ordered list of (role_name, count) from preset defaults
+        role_items = []
+        for role_key, count in defaults.items():
+            if role_key in roles:
+                role_items.append((roles[role_key]["name"], count))
+            else:
+                role_items.append((role_key, count))
 
-        # Slot 5: support + scout + any extra
+        # Fill slots 1-4 with first 4 roles
+        slots = [self.slot1, self.slot2, self.slot3, self.slot4]
+        for i, slot in enumerate(slots):
+            if i < len(role_items):
+                name, count = role_items[i]
+                slot.default = f"{name} : {count}"
+                slot.label = f"Role {i + 1}"
+            else:
+                slot.default = ""
+                slot.label = f"Role {i + 1}"
+                slot.required = False
+
+        # Slot 5: remaining roles (5+)
         extra_lines = []
-        if defaults.get("support", 0) > 0:
-            extra_lines.append(f"{roles['support']['name']} : {defaults['support']}")
-        if defaults.get("scout", 0) > 0:
-            extra_lines.append(f"{roles['scout']['name']} : {defaults['scout']}")
-        self.slot5.default = "\n".join(extra_lines) if extra_lines else f"{roles['support']['name']} : 1"
-        self.slot5.label = "📋 More roles (one per line)"
+        for i in range(4, len(role_items)):
+            name, count = role_items[i]
+            extra_lines.append(f"{name} : {count}")
+        self.slot5.default = "\n".join(extra_lines) if extra_lines else ""
+        self.slot5.label = "More roles (one per line)"
         self.slot5.placeholder = "Support : 1\nScout : 2\nBattlemount : 1"
 
     def _parse_slot(self, value: str) -> list:
@@ -383,6 +447,9 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             await interaction.response.send_message("❌ Max 50 players!", ephemeral=True)
             return
 
+        # Get custom Discord emojis from this guild
+        emoji_map = await get_guild_emoji_map(interaction.guild)
+
         # Build composition and custom role names
         composition = {}
         role_display = {}
@@ -400,19 +467,19 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
                 role_key = f"custom_{i}_{name.lower().replace(' ', '_')[:20]}"
 
             composition[role_key] = count
-            # Use existing emoji if found, otherwise default
-            if role_key in existing_roles:
-                role_display[role_key] = {
-                    "emoji": existing_roles[role_key]["emoji"],
-                    "name": name,
-                    "description": "",
-                }
-            else:
-                role_display[role_key] = {
-                    "emoji": "🎮",
-                    "name": name,
-                    "description": "",
-                }
+
+            # Emoji priority: 1) custom Discord emoji, 2) existing role emoji, 3) default
+            emoji = "🎮"
+            if role_key in emoji_map:
+                emoji = emoji_map[role_key]
+            elif role_key in existing_roles:
+                emoji = existing_roles[role_key]["emoji"]
+
+            role_display[role_key] = {
+                "emoji": emoji,
+                "name": name,
+                "description": "",
+            }
 
         # Calculate timestamps
         now = time_module.time()
@@ -494,7 +561,7 @@ class TeamBuilder(commands.Cog):
 
     @role_mgmt.command(name="list", description="📋 Show all available roles")
     async def role_list(self, interaction: discord.Interaction):
-        roles = await get_guild_roles(interaction.guild_id)
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
 
         embed = discord.Embed(title="📋 Available Roles", color=discord.Color.blue())
 
@@ -530,7 +597,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.checks.has_permissions(manage_guild=True)
     async def role_emoji(self, interaction: discord.Interaction, key: str, emoji: str):
         key = key.lower().replace(" ", "_")
-        roles = await get_guild_roles(interaction.guild_id)
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         if key not in roles:
             await interaction.response.send_message(
                 f"❌ Role `{key}` not found!\nAvailable: {', '.join(f'`{k}`' for k in roles.keys())}",
@@ -541,6 +608,61 @@ class TeamBuilder(commands.Cog):
         role_info = roles[key]
         await db.add_custom_role(interaction.guild_id, key, role_info["name"], emoji, role_info.get("description", ""))
         await interaction.response.send_message(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
+
+    # --- Emoji Upload Commands ---
+
+    @app_commands.command(name="upload_emojis", description="📤 Upload AVA RAID weapon emojis to this server")
+    @app_commands.checks.has_permissions(manage_emojis_and_stickers=True)
+    async def upload_emojis(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        images_path = AVA_RAID_IMAGES_PATH
+        if not os.path.exists(images_path):
+            await interaction.followup.send("❌ Emoji images folder not found! Contact the bot admin.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        uploaded = []
+        skipped = []
+        failed = []
+
+        existing_emoji_names = {e.name.lower() for e in guild.emojis}
+
+        for role_key, role_info in AVA_RAID_ROLES.items():
+            # Check if already uploaded
+            if role_key in existing_emoji_names:
+                skipped.append(role_info["name"])
+                continue
+
+            image_file = os.path.join(images_path, role_info["image"])
+            if not os.path.exists(image_file):
+                failed.append(f"{role_info['name']} (file missing)")
+                continue
+
+            try:
+                with open(image_file, "rb") as f:
+                    image_data = f.read()
+
+                # Discord emoji name: only alphanumeric and underscores, 2-32 chars
+                emoji_name = role_key[:32]
+                await guild.create_custom_emoji(name=emoji_name, image=image_data)
+                uploaded.append(role_info["name"])
+            except discord.HTTPException as e:
+                failed.append(f"{role_info['name']} ({e.text})")
+
+        # Build result message
+        result_parts = []
+        if uploaded:
+            result_parts.append(f"✅ **Uploaded ({len(uploaded)}):**\n" + "\n".join(f"  • {n}" for n in uploaded))
+        if skipped:
+            result_parts.append(f"⏭️ **Already exists ({len(skipped)}):**\n" + "\n".join(f"  • {n}" for n in skipped))
+        if failed:
+            result_parts.append(f"❌ **Failed ({len(failed)}):**\n" + "\n".join(f"  • {n}" for n in failed))
+
+        if not result_parts:
+            result_parts.append("No emojis to upload.")
+
+        await interaction.followup.send("\n\n".join(result_parts), ephemeral=True)
 
     # --- Team Commands ---
 
@@ -554,6 +676,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.choices(
         content=[
             app_commands.Choice(name="🛤️ Ava Road", value="ava_road"),
+            app_commands.Choice(name="⚔️ AVA RAID (10)", value="ava_raid"),
             app_commands.Choice(name="🐀 Rat Static", value="rat_static"),
             app_commands.Choice(name="⭐ Fame Farm Static", value="fame_farm"),
             app_commands.Choice(name="⚔️ ZvZ", value="zvz"),
@@ -573,7 +696,7 @@ class TeamBuilder(commands.Cog):
         start_time: Optional[str] = None,
         close_after: Optional[float] = None,
     ):
-        roles = await get_guild_roles(interaction.guild_id)
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         modal = CompositionModal(
             team_name=name,
             content_key=content,
@@ -594,6 +717,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.choices(
         content=[
             app_commands.Choice(name="🛤️ Ava Road", value="ava_road"),
+            app_commands.Choice(name="⚔️ AVA RAID", value="ava_raid"),
             app_commands.Choice(name="🐀 Rat Static", value="rat_static"),
             app_commands.Choice(name="⭐ Fame Farm", value="fame_farm"),
             app_commands.Choice(name="🗡️ Ganking", value="ganking"),
@@ -603,7 +727,7 @@ class TeamBuilder(commands.Cog):
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
                         start_time: Optional[str] = None, close_after: Optional[float] = None):
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
-        roles = await get_guild_roles(interaction.guild_id)
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
 
         now = time_module.time()
         close_timestamp = None
