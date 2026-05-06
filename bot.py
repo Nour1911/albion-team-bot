@@ -17,6 +17,31 @@ intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
+async def auto_upload_emojis():
+    """Auto-upload AVA RAID emojis to all guilds the bot is in."""
+    from cogs.team_builder import AVA_RAID_ROLES, AVA_RAID_IMAGES_PATH
+
+    if not os.path.exists(AVA_RAID_IMAGES_PATH):
+        print("⚠️ Emoji images folder not found, skipping auto-upload")
+        return
+
+    for guild in bot.guilds:
+        existing_names = {e.name.lower() for e in guild.emojis}
+        for role_key, role_info in AVA_RAID_ROLES.items():
+            if role_key in existing_names:
+                continue
+            image_file = os.path.join(AVA_RAID_IMAGES_PATH, role_info["image"])
+            if not os.path.exists(image_file):
+                continue
+            try:
+                with open(image_file, "rb") as f:
+                    image_data = f.read()
+                await guild.create_custom_emoji(name=role_key[:32], image=image_data)
+                print(f"  📤 Uploaded emoji: {role_key} -> {guild.name}")
+            except Exception as e:
+                print(f"  ⚠️ Failed {role_key} in {guild.name}: {e}")
+
+
 @bot.event
 async def on_ready():
     await db.init_db()
@@ -29,6 +54,11 @@ async def on_ready():
         print(f"🔄 Synced {len(synced)} slash commands")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
+
+    # Auto-upload emojis
+    print("📤 Checking emojis...")
+    await auto_upload_emojis()
+    print("✅ Emoji check complete!")
 
 
 @bot.tree.command(name="ping", description="Check if the bot is alive")
