@@ -609,6 +609,58 @@ class TeamBuilder(commands.Cog):
         await db.add_custom_role(interaction.guild_id, key, role_info["name"], emoji, role_info.get("description", ""))
         await interaction.response.send_message(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
 
+    # --- Emoji Upload ---
+
+    @app_commands.command(name="upload_emojis", description="📤 Upload AVA RAID weapon emojis to this server")
+    @app_commands.checks.has_permissions(manage_emojis_and_stickers=True)
+    async def upload_emojis(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        images_path = AVA_RAID_IMAGES_PATH
+        if not os.path.exists(images_path):
+            await interaction.followup.send("❌ Emoji images folder not found!")
+            return
+
+        guild = interaction.guild
+        uploaded = []
+        skipped = []
+        failed = []
+
+        existing_emoji_names = {e.name.lower() for e in guild.emojis}
+
+        for role_key, role_info in AVA_RAID_ROLES.items():
+            if role_key in existing_emoji_names:
+                skipped.append(role_info["name"])
+                continue
+
+            image_file = os.path.join(images_path, role_info["image"])
+            if not os.path.exists(image_file):
+                failed.append(f"{role_info['name']} (file missing: {role_info['image']})")
+                continue
+
+            try:
+                with open(image_file, "rb") as f:
+                    image_data = f.read()
+                emoji_name = role_key[:32]
+                await guild.create_custom_emoji(name=emoji_name, image=image_data)
+                uploaded.append(role_info["name"])
+            except discord.HTTPException as e:
+                failed.append(f"{role_info['name']} ({e.status}: {e.text})")
+            except Exception as e:
+                failed.append(f"{role_info['name']} ({e})")
+
+        result_parts = []
+        if uploaded:
+            result_parts.append(f"✅ **Uploaded ({len(uploaded)}):**\n" + "\n".join(f"  • {n}" for n in uploaded))
+        if skipped:
+            result_parts.append(f"⏭️ **Already exists ({len(skipped)}):**\n" + "\n".join(f"  • {n}" for n in skipped))
+        if failed:
+            result_parts.append(f"❌ **Failed ({len(failed)}):**\n" + "\n".join(f"  • {n}" for n in failed))
+        if not uploaded and not skipped and not failed:
+            result_parts.append("No emojis found to upload.")
+
+        await interaction.followup.send("\n\n".join(result_parts))
+
     # --- Team Commands ---
 
     @app_commands.command(name="createteam", description="⚔️ Create a team for a run")
