@@ -21,7 +21,6 @@ DEFAULT_ROLES = {
 AVA_RAID_ROLES = {
     "main_tank": {"emoji": "🛡️", "name": "Main TANK", "image": "Main TANK.png"},
     "off_tank_mace": {"emoji": "🔨", "name": "OFF TANK MACE", "image": "OFF_TANK_MACE_.png"},
-    "main_heal": {"emoji": "💚", "name": "MAIN HEAL", "image": "MAIN_HEAL.png"},
     "main_holystaff": {"emoji": "✝️", "name": "MAIN HOLYSTAFF", "image": "MAIN_HOLYSTAFF.png"},
     "blazing_dps": {"emoji": "🔥", "name": "Blazing DPS", "image": "Blazing DPS.png"},
     "arctic_dps": {"emoji": "❄️", "name": "ARCTIC DPS", "image": "ARCTIC DPS.png"},
@@ -84,9 +83,9 @@ CONTENT_PRESETS = {
     },
     "ava_raid": {
         "name": "⚔️ AVA RAID",
-        "max_players": 11,
+        "max_players": 10,
         "default": {
-            "main_tank": 1, "off_tank_mace": 1, "main_heal": 1, "main_holystaff": 1,
+            "main_tank": 1, "off_tank_mace": 1, "main_holystaff": 1,
             "blazing_dps": 1, "arctic_dps": 1, "ligt_cl_dps": 1, "sadwo_cl_dps": 1,
             "weeping": 1, "shapeshifter_crystal": 1, "mistpiecer_dps": 1,
         },
@@ -367,14 +366,14 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
     slot5 = discord.ui.TextInput(label="Role 5 (extra roles: one per line)", placeholder="Support : 1\nScout : 1", default="Support : 1", max_length=200, required=False, style=discord.TextStyle.paragraph)
 
     def __init__(self, team_name: str, content_key: str, guild_id: int, roles: dict,
-                 hours_to_close: float = 0, start_time: str = None):
+                 hours_to_close: float = 0, start_after: float = 0):
         super().__init__()
         self.team_name = team_name
         self.content_key = content_key
         self.guild_id = guild_id
         self.all_roles = roles
         self.hours_to_close = hours_to_close
-        self.start_time = start_time
+        self.start_after = start_after
 
         preset = CONTENT_PRESETS.get(content_key, CONTENT_PRESETS["custom"])
         defaults = preset["default"]
@@ -493,20 +492,8 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
         if self.hours_to_close and self.hours_to_close > 0:
             close_timestamp = now + (self.hours_to_close * 3600)
 
-        if self.start_time:
-            try:
-                parts = self.start_time.replace(" ", "").upper()
-                today = datetime.now()
-                if "PM" in parts or "AM" in parts:
-                    t = datetime.strptime(parts, "%I:%M%p").time()
-                else:
-                    t = datetime.strptime(parts, "%H:%M").time()
-                start_dt = datetime.combine(today.date(), t)
-                if start_dt < today:
-                    start_dt += timedelta(days=1)
-                start_timestamp = start_dt.timestamp()
-            except ValueError:
-                pass
+        if self.start_after and self.start_after > 0:
+            start_timestamp = now + (self.start_after * 3600)
 
         team_data = {
             "name": self.team_name,
@@ -522,6 +509,141 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
         embed = build_team_embed(team_data, role_display)
         view = TeamBuilderView(team_data, role_display)
         await interaction.response.send_message(content="@everyone", embed=embed, view=view)
+
+
+class WeaponSelect(discord.ui.Select):
+    """Dropdown to select weapons for team building."""
+
+    def __init__(self, roles: dict, builder_view):
+        options = []
+        for key, info in list(AVA_RAID_ROLES.items()) + list(DEFAULT_ROLES.items()):
+            emoji_str = roles.get(key, {}).get("emoji", info.get("emoji", "🎮"))
+            # Discord Select options need emoji as PartialEmoji or None
+            try:
+                options.append(discord.SelectOption(
+                    label=info["name"],
+                    value=key,
+                    emoji=emoji_str if len(emoji_str) <= 2 else None,
+                    description=f"Code: {key}",
+                ))
+            except Exception:
+                options.append(discord.SelectOption(
+                    label=info["name"],
+                    value=key,
+                    description=f"Code: {key}",
+                ))
+        # Discord max 25 options
+        options = options[:25]
+        super().__init__(placeholder="🗡️ Choose a weapon/role to add...", options=options, min_values=1, max_values=1)
+        self.roles = roles
+        self.builder_view = builder_view
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_key = self.values[0]
+        role_info = self.roles.get(selected_key, AVA_RAID_ROLES.get(selected_key, DEFAULT_ROLES.get(selected_key)))
+
+        # Add to composition
+        if selected_key in self.builder_view.composition:
+            self.builder_view.composition[selected_key] += 1
+        else:
+            self.builder_view.composition[selected_key] = 1
+
+        # Update embed
+        embed = self.builder_view.build_preview()
+        await interaction.response.edit_message(embed=embed, view=self.builder_view)
+
+
+class BuilderConfirmButton(discord.ui.Button):
+    """Confirm and publish the team."""
+
+    def __init__(self, builder_view):
+        super().__init__(style=discord.ButtonStyle.success, label="✅ Publish Team", row=2)
+        self.builder_view = builder_view
+
+    async def callback(self, interaction: discord.Interaction):
+        bv = self.builder_view
+        if not bv.composition:
+            await interaction.response.send_message("❌ Add at least 1 weapon first!", ephemeral=True)
+            return
+
+        total = sum(bv.composition.values())
+        now = time_module.time()
+        close_timestamp = None
+        start_timestamp = None
+
+        if bv.close_after and bv.close_after > 0:
+            close_timestamp = now + (bv.close_after * 3600)
+        if bv.start_after and bv.start_after > 0:
+            start_timestamp = now + (bv.start_after * 3600)
+
+        team_data = {
+            "name": bv.team_name,
+            "event_type": bv.event_type,
+            "composition": bv.composition,
+            "signed": {},
+            "max_players": total,
+            "created_by": interaction.user.id,
+            "close_timestamp": close_timestamp,
+            "start_timestamp": start_timestamp,
+        }
+
+        embed = build_team_embed(team_data, bv.roles)
+        view = TeamBuilderView(team_data, bv.roles)
+
+        # Delete the builder message and send the real team
+        await interaction.message.delete()
+        await interaction.channel.send(content="@everyone", embed=embed, view=view)
+
+
+class BuilderClearButton(discord.ui.Button):
+    """Clear all selections."""
+
+    def __init__(self, builder_view):
+        super().__init__(style=discord.ButtonStyle.danger, label="🗑️ Clear", row=2)
+        self.builder_view = builder_view
+
+    async def callback(self, interaction: discord.Interaction):
+        self.builder_view.composition = {}
+        embed = self.builder_view.build_preview()
+        await interaction.response.edit_message(embed=embed, view=self.builder_view)
+
+
+class TeamBuilderDropdownView(discord.ui.View):
+    """Interactive view with dropdown to build team composition."""
+
+    def __init__(self, team_name: str, event_type: str, roles: dict,
+                 start_after: float = 0, close_after: float = 0):
+        super().__init__(timeout=300)
+        self.team_name = team_name
+        self.event_type = event_type
+        self.roles = roles
+        self.composition = {}
+        self.start_after = start_after
+        self.close_after = close_after
+
+        self.add_item(WeaponSelect(roles, self))
+        self.add_item(BuilderConfirmButton(self))
+        self.add_item(BuilderClearButton(self))
+
+    def build_preview(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"🔨 Building: {self.team_name}",
+            color=discord.Color.blue(),
+        )
+
+        if not self.composition:
+            embed.description = "**Select weapons from the dropdown below to build your team.**\n\nNo weapons added yet."
+        else:
+            total = sum(self.composition.values())
+            lines = [f"**{self.event_type}** | Total: **{total}** slots\n"]
+            for key, count in self.composition.items():
+                role_info = self.roles.get(key, {"emoji": "🎮", "name": key})
+                lines.append(f"{role_info['emoji']} **{role_info['name']}** x{count}")
+            lines.append(f"\n*Select more weapons or click ✅ Publish Team*")
+            embed.description = "\n".join(lines)
+
+        embed.set_footer(text="Each selection adds +1 of that weapon. Click Publish when done.")
+        return embed
 
 
 class TeamBuilder(commands.Cog):
@@ -613,6 +735,43 @@ class TeamBuilder(commands.Cog):
         await db.add_custom_role(interaction.guild_id, key, role_info["name"], emoji, role_info.get("description", ""))
         await interaction.response.send_message(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
 
+    # --- Build (Dropdown) ---
+
+    @app_commands.command(name="build", description="🔨 Build a team with dropdown weapon selection")
+    @app_commands.describe(
+        name="Team name",
+        content="Content type",
+        start_after="Start after X hours (e.g., 1 = 1 hour, 0.5 = 30 min)",
+        close_after="Registration closes after X hours",
+    )
+    @app_commands.choices(
+        content=[
+            app_commands.Choice(name="🛤️ Ava Road", value="ava_road"),
+            app_commands.Choice(name="⚔️ AVA RAID", value="ava_raid"),
+            app_commands.Choice(name="🐀 Rat Static", value="rat_static"),
+            app_commands.Choice(name="⭐ Fame Farm", value="fame_farm"),
+            app_commands.Choice(name="⚔️ ZvZ", value="zvz"),
+            app_commands.Choice(name="🗡️ Ganking", value="ganking"),
+            app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
+            app_commands.Choice(name="💀 HCE", value="hce"),
+            app_commands.Choice(name="📌 Custom", value="custom"),
+        ]
+    )
+    async def build(self, interaction: discord.Interaction, name: str, content: str,
+                    start_after: Optional[float] = None, close_after: Optional[float] = None):
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
+        preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["custom"])
+
+        builder = TeamBuilderDropdownView(
+            team_name=name,
+            event_type=preset["name"],
+            roles=roles,
+            start_after=start_after or 0,
+            close_after=close_after or 0,
+        )
+        embed = builder.build_preview()
+        await interaction.response.send_message(embed=embed, view=builder, ephemeral=True)
+
     # --- Emoji Upload ---
 
     @app_commands.command(name="upload_emojis", description="📤 Upload AVA RAID weapon emojis to this server")
@@ -696,7 +855,7 @@ class TeamBuilder(commands.Cog):
         weapon="Weapon code (use /weapons to see all codes)",
         content="Content type",
         count="How many of this weapon (default 1)",
-        start_time="Start time (e.g., 8:00PM or 20:00)",
+        start_after="Start after X hours (e.g., 1 = 1 hour, 0.5 = 30 min)",
         close_after="Registration closes after X hours",
     )
     @app_commands.choices(
@@ -712,7 +871,7 @@ class TeamBuilder(commands.Cog):
     )
     async def quickadd(self, interaction: discord.Interaction, name: str, weapon: str,
                        content: str = "custom", count: int = 1,
-                       start_time: Optional[str] = None, close_after: Optional[float] = None):
+                       start_after: Optional[float] = None, close_after: Optional[float] = None):
         """Create a quick team with a single weapon/role."""
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         weapon_key = weapon.lower().replace(" ", "_")
@@ -733,20 +892,8 @@ class TeamBuilder(commands.Cog):
 
         if close_after and close_after > 0:
             close_timestamp = now + (close_after * 3600)
-        if start_time:
-            try:
-                parts = start_time.replace(" ", "").upper()
-                today = datetime.now()
-                if "PM" in parts or "AM" in parts:
-                    t = datetime.strptime(parts, "%I:%M%p").time()
-                else:
-                    t = datetime.strptime(parts, "%H:%M").time()
-                start_dt = datetime.combine(today.date(), t)
-                if start_dt < today:
-                    start_dt += timedelta(days=1)
-                start_timestamp = start_dt.timestamp()
-            except ValueError:
-                pass
+        if start_after and start_after > 0:
+            start_timestamp = now + (start_after * 3600)
 
         team_data = {
             "name": name,
@@ -770,7 +917,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         name="Team/Run name (e.g., Evening Ava Roads)",
         content="Type of content",
-        start_time="Start time (e.g., 8:00PM or 20:00)",
+        start_after="Start after X hours (e.g., 1 = starts in 1 hour, 0.5 = 30 min)",
         close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
     )
     @app_commands.choices(
@@ -793,7 +940,7 @@ class TeamBuilder(commands.Cog):
         interaction: discord.Interaction,
         name: str,
         content: str,
-        start_time: Optional[str] = None,
+        start_after: Optional[float] = None,
         close_after: Optional[float] = None,
     ):
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
@@ -803,7 +950,7 @@ class TeamBuilder(commands.Cog):
             guild_id=interaction.guild_id,
             roles=roles,
             hours_to_close=close_after or 0,
-            start_time=start_time,
+            start_after=start_after or 0,
         )
         await interaction.response.send_modal(modal)
 
@@ -811,7 +958,7 @@ class TeamBuilder(commands.Cog):
     @app_commands.describe(
         name="Team/Run name",
         content="Type of content (uses default composition)",
-        start_time="Start time (e.g., 8:00PM or 20:00)",
+        start_after="Start after X hours (e.g., 1 = 1 hour, 0.5 = 30 min)",
         close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
     )
     @app_commands.choices(
@@ -825,7 +972,7 @@ class TeamBuilder(commands.Cog):
         ]
     )
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
-                        start_time: Optional[str] = None, close_after: Optional[float] = None):
+                        start_after: Optional[float] = None, close_after: Optional[float] = None):
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
 
@@ -835,21 +982,8 @@ class TeamBuilder(commands.Cog):
 
         if close_after and close_after > 0:
             close_timestamp = now + (close_after * 3600)
-
-        if start_time:
-            try:
-                parts = start_time.replace(" ", "").upper()
-                today = datetime.now()
-                if "PM" in parts or "AM" in parts:
-                    t = datetime.strptime(parts, "%I:%M%p").time()
-                else:
-                    t = datetime.strptime(parts, "%H:%M").time()
-                start_dt = datetime.combine(today.date(), t)
-                if start_dt < today:
-                    start_dt += timedelta(days=1)
-                start_timestamp = start_dt.timestamp()
-            except ValueError:
-                pass
+        if start_after and start_after > 0:
+            start_timestamp = now + (start_after * 3600)
 
         team_data = {
             "name": name,
