@@ -193,12 +193,7 @@ class RoleButton(discord.ui.Button):
         user_id = interaction.user.id
         user_name = interaction.user.display_name
         signed = self.team_data["signed"]
-
-        # Remove user from any other role first
-        for role, players in signed.items():
-            if user_id in [p["id"] for p in players]:
-                signed[role] = [p for p in players if p["id"] != user_id]
-                break
+        is_scout = self.role_key == "scout"
 
         current_players = signed.get(self.role_key, [])
 
@@ -210,6 +205,16 @@ class RoleButton(discord.ui.Button):
                 embed=build_team_embed(self.team_data, self.roles), view=self.view
             )
             return
+
+        # Scout is special: player can be scout + another role
+        # For non-scout roles: remove from other non-scout roles first
+        if not is_scout:
+            for role, players in signed.items():
+                if role == "scout":
+                    continue  # Don't remove from scout when joining another role
+                if user_id in [p["id"] for p in players]:
+                    signed[role] = [p for p in players if p["id"] != user_id]
+                    break
 
         # Check limit
         if len(current_players) >= self.limit:
