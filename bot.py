@@ -77,26 +77,22 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="⚔️ Team Builder",
         value=(
-            "`/createteam` - Create a new team for a run\n"
-            "`/myteams` - Show your active teams"
+            "`/createteam` - Create a team (with modal editor)\n"
+            "`/quickteam` - Quick preset team in one click\n"
+            "`/build` - Build team with dropdown weapon selection\n"
+            "`/quickadd` - Quick single-weapon team"
         ),
         inline=False,
     )
     embed.add_field(
-        name="📅 Events",
+        name="🗡️ Weapons & Roles",
         value=(
-            "`/event create` - Create a new event\n"
-            "`/event list` - Show upcoming events\n"
-            "`/event delete` - Delete an event"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📊 Attendance",
-        value=(
-            "React with role emojis on team messages to join\n"
-            "`/attendance stats` - Show attendance stats\n"
-            "`/attendance me` - Show your stats"
+            "`/weapons` - Show all available weapons/roles\n"
+            "`/upload_emojis` - Upload weapon emojis to server\n"
+            "`/role add` - Add custom role\n"
+            "`/role remove` - Remove custom role\n"
+            "`/role list` - List all roles\n"
+            "`/role emoji` - Change role emoji"
         ),
         inline=False,
     )
@@ -111,8 +107,6 @@ async def help_command(interaction: discord.Interaction):
 async def main():
     async with bot:
         await bot.load_extension("cogs.team_builder")
-        await bot.load_extension("cogs.events")
-        await bot.load_extension("cogs.attendance")
         await bot.start(TOKEN)
 
 

@@ -211,13 +211,7 @@ class RoleButton(discord.ui.Button):
             )
             return
 
-        # Check limit
-        if len(current_players) >= self.limit:
-            await interaction.response.send_message(
-                f"❌ {self.roles[self.role_key]['name']} is full! ({self.limit}/{self.limit})",
-                ephemeral=True,
-            )
-            return
+        # No hard limit - allow joining even if over suggested count
 
         # Add player
         if self.role_key not in signed:
@@ -234,7 +228,7 @@ class RoleButton(discord.ui.Button):
             if isinstance(item, RoleButton):
                 count = len(signed.get(item.role_key, []))
                 item.label = f"{self.roles[item.role_key]['name']} ({count}/{item.limit})"
-                if count >= item.limit:
+                if count > 0:
                     item.style = discord.ButtonStyle.success
                 else:
                     item.style = discord.ButtonStyle.secondary
@@ -590,9 +584,14 @@ class BuilderConfirmButton(discord.ui.Button):
         embed = build_team_embed(team_data, bv.roles)
         view = TeamBuilderView(team_data, bv.roles)
 
-        # Delete the builder message and send the real team
-        await interaction.message.delete()
+        # Respond to the interaction first, then send the team to the channel
+        await interaction.response.send_message("✅ Team published!", ephemeral=True)
         await interaction.channel.send(content="@everyone", embed=embed, view=view)
+        # Delete the builder message
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
 
 
 class BuilderClearButton(discord.ui.Button):
