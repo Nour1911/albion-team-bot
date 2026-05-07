@@ -211,7 +211,13 @@ class RoleButton(discord.ui.Button):
             )
             return
 
-        # No hard limit - allow joining even if over suggested count
+        # Check limit
+        if len(current_players) >= self.limit:
+            await interaction.response.send_message(
+                f"❌ {self.roles[self.role_key]['name']} is full! ({self.limit}/{self.limit})",
+                ephemeral=True,
+            )
+            return
 
         # Add player
         if self.role_key not in signed:
@@ -228,7 +234,7 @@ class RoleButton(discord.ui.Button):
             if isinstance(item, RoleButton):
                 count = len(signed.get(item.role_key, []))
                 item.label = f"{self.roles[item.role_key]['name']} ({count}/{item.limit})"
-                if count > 0:
+                if count >= item.limit:
                     item.style = discord.ButtonStyle.success
                 else:
                     item.style = discord.ButtonStyle.secondary
@@ -440,9 +446,6 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             return
 
         total = sum(count for _, count in all_roles_parsed)
-        if total > 50:
-            await interaction.response.send_message("❌ Max 50 players!", ephemeral=True)
-            return
 
         # Get custom Discord emojis from this guild
         emoji_map = await get_guild_emoji_map(interaction.guild)
