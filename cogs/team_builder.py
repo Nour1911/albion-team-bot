@@ -29,6 +29,7 @@ AVA_RAID_ROLES = {
     "sadwo_cl_dps": {"emoji": "🌑", "name": "Sadwo CL DPS", "image": "Sadwo CL DPS.png"},
     "weeping": {"emoji": "💧", "name": "Weeping", "image": "Weeping.png"},
     "shapeshifter_crystal": {"emoji": "💎", "name": "SHAPESHIFTER CRYSTAL", "image": "_SHAPESHIFTER_CRYSTAL.png"},
+    "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer DPS", "image": "Mistpiecer DPS.png"},
 }
 
 # Path to AVA RAID emoji images
@@ -83,11 +84,11 @@ CONTENT_PRESETS = {
     },
     "ava_raid": {
         "name": "⚔️ AVA RAID",
-        "max_players": 10,
+        "max_players": 11,
         "default": {
             "main_tank": 1, "off_tank_mace": 1, "main_heal": 1, "main_holystaff": 1,
             "blazing_dps": 1, "arctic_dps": 1, "ligt_cl_dps": 1, "sadwo_cl_dps": 1,
-            "weeping": 1, "shapeshifter_crystal": 1,
+            "weeping": 1, "shapeshifter_crystal": 1, "mistpiecer_dps": 1,
         },
         "custom_roles": True,
     },
@@ -304,15 +305,14 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
         color=color,
     )
 
-    # Build description with time info
-    desc_parts = [
-        f"**{team_data['event_type']}** | Players: **{total_signed}/{total_slots}**"
-    ]
+    # Build description - START TIME big and bold at top
+    desc_parts = []
 
     start_ts = team_data.get("start_timestamp")
     if start_ts:
-        # Discord timestamp format - shows countdown automatically
-        desc_parts.append(f"⏰ **Start:** <t:{int(start_ts)}:t> (<t:{int(start_ts)}:R>)")
+        desc_parts.append(f"# ⏰ <t:{int(start_ts)}:t> — <t:{int(start_ts)}:R>")
+
+    desc_parts.append(f"**{team_data['event_type']}** | Players: **{total_signed}/{total_slots}**")
 
     if close_ts:
         if is_closed:
@@ -320,27 +320,31 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
         else:
             desc_parts.append(f"🔒 **Closes:** <t:{int(close_ts)}:t> (<t:{int(close_ts)}:R>)")
 
-    embed.description = "\n".join(desc_parts)
+    desc_parts.append("")  # empty line separator
 
+    # Roles listed vertically in description
     for role_key, limit in team_data["composition"].items():
         if limit <= 0 or role_key not in roles:
             continue
         role_info = roles[role_key]
         players = team_data["signed"].get(role_key, [])
 
-        if players:
-            player_names = "\n".join(f"✅ {p['name']}" for p in players)
-            empty_slots = limit - len(players)
-            if empty_slots > 0:
-                player_names += "\n" + "\n".join(["⬜ ..." for _ in range(empty_slots)])
-        else:
-            player_names = "\n".join(["⬜ ..." for _ in range(limit)])
+        header = f"{role_info['emoji']} **{role_info['name']}** ({len(players)}/{limit})"
+        desc_parts.append(header)
 
-        embed.add_field(
-            name=f"{role_info['emoji']} {role_info['name']} ({len(players)}/{limit})",
-            value=player_names,
-            inline=True,
-        )
+        if players:
+            for p in players:
+                desc_parts.append(f"  ✅ {p['name']}")
+            empty_slots = limit - len(players)
+            for _ in range(empty_slots):
+                desc_parts.append("  ⬜ ...")
+        else:
+            for _ in range(limit):
+                desc_parts.append("  ⬜ ...")
+
+        desc_parts.append("")  # spacing between roles
+
+    embed.description = "\n".join(desc_parts)
 
     if is_closed:
         embed.set_footer(text="🔒 Registration is CLOSED")
@@ -660,6 +664,105 @@ class TeamBuilder(commands.Cog):
             result_parts.append("No emojis found to upload.")
 
         await interaction.followup.send("\n\n".join(result_parts))
+
+    # --- Weapon Shortcuts ---
+
+    @app_commands.command(name="weapons", description="🗡️ Show all available weapons/roles with their codes")
+    async def weapons(self, interaction: discord.Interaction):
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
+
+        embed = discord.Embed(title="🗡️ Available Weapons & Roles", color=discord.Color.blue())
+
+        # Group: AVA RAID weapons
+        ava_lines = []
+        for key, info in AVA_RAID_ROLES.items():
+            emoji = roles.get(key, {}).get("emoji", info["emoji"])
+            ava_lines.append(f"{emoji} `{key}` — {info['name']}")
+        embed.add_field(name="⚔️ AVA RAID Weapons", value="\n".join(ava_lines), inline=False)
+
+        # Group: Default roles
+        default_lines = []
+        for key, info in DEFAULT_ROLES.items():
+            emoji = roles.get(key, {}).get("emoji", info["emoji"])
+            default_lines.append(f"{emoji} `{key}` — {info['name']}")
+        embed.add_field(name="🛡️ Default Roles", value="\n".join(default_lines), inline=False)
+
+        embed.set_footer(text="Use these codes in /createteam modal or /quickadd command")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="quickadd", description="⚡ Quick add a weapon to any team type")
+    @app_commands.describe(
+        name="Team name",
+        weapon="Weapon code (use /weapons to see all codes)",
+        content="Content type",
+        count="How many of this weapon (default 1)",
+        start_time="Start time (e.g., 8:00PM or 20:00)",
+        close_after="Registration closes after X hours",
+    )
+    @app_commands.choices(
+        content=[
+            app_commands.Choice(name="🛤️ Ava Road", value="ava_road"),
+            app_commands.Choice(name="⚔️ AVA RAID", value="ava_raid"),
+            app_commands.Choice(name="🐀 Rat Static", value="rat_static"),
+            app_commands.Choice(name="⭐ Fame Farm", value="fame_farm"),
+            app_commands.Choice(name="🗡️ Ganking", value="ganking"),
+            app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
+            app_commands.Choice(name="📌 Custom", value="custom"),
+        ]
+    )
+    async def quickadd(self, interaction: discord.Interaction, name: str, weapon: str,
+                       content: str = "custom", count: int = 1,
+                       start_time: Optional[str] = None, close_after: Optional[float] = None):
+        """Create a quick team with a single weapon/role."""
+        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
+        weapon_key = weapon.lower().replace(" ", "_")
+
+        if weapon_key not in roles:
+            available = ", ".join(f"`{k}`" for k in list(AVA_RAID_ROLES.keys()) + list(DEFAULT_ROLES.keys()))
+            await interaction.response.send_message(
+                f"❌ Weapon `{weapon}` not found!\n\nAvailable codes:\n{available}\n\nUse `/weapons` to see all.",
+                ephemeral=True,
+            )
+            return
+
+        preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["custom"])
+
+        now = time_module.time()
+        close_timestamp = None
+        start_timestamp = None
+
+        if close_after and close_after > 0:
+            close_timestamp = now + (close_after * 3600)
+        if start_time:
+            try:
+                parts = start_time.replace(" ", "").upper()
+                today = datetime.now()
+                if "PM" in parts or "AM" in parts:
+                    t = datetime.strptime(parts, "%I:%M%p").time()
+                else:
+                    t = datetime.strptime(parts, "%H:%M").time()
+                start_dt = datetime.combine(today.date(), t)
+                if start_dt < today:
+                    start_dt += timedelta(days=1)
+                start_timestamp = start_dt.timestamp()
+            except ValueError:
+                pass
+
+        team_data = {
+            "name": name,
+            "event_type": preset["name"],
+            "composition": {weapon_key: count},
+            "signed": {},
+            "max_players": count,
+            "created_by": interaction.user.id,
+            "close_timestamp": close_timestamp,
+            "start_timestamp": start_timestamp,
+        }
+
+        role_display = {weapon_key: roles[weapon_key]}
+        embed = build_team_embed(team_data, role_display)
+        view = TeamBuilderView(team_data, role_display)
+        await interaction.response.send_message(content="@everyone", embed=embed, view=view)
 
     # --- Team Commands ---
 
