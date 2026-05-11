@@ -27,9 +27,8 @@ AVA_RAID_ROLES = {
     "ligt_cl_dps": {"emoji": "⚡", "name": "Lightcaller", "image": "Ligt CL DPS.png"},
     "sadwo_cl_dps": {"emoji": "🌑", "name": "Shadowcaller", "image": "Sadwo CL DPS.png"},
     "weeping": {"emoji": "💧", "name": "Weeping", "image": "Weeping.png"},
-    "shapeshifter_crystal": {"emoji": "💎", "name": "SHAPESHIFTER CRYSTAL", "image": "_SHAPESHIFTER_CRYSTAL.png"},
-    "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer", "image": "Mistpiecer DPS.png"},
     "stillgaze": {"emoji": "👁️", "name": "Stillgaze (PartyHealerSwap)", "image": "Stillgaze.png"},
+    "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer", "image": "Mistpiecer DPS.png"},
 }
 
 # Path to AVA RAID emoji images
@@ -88,7 +87,7 @@ CONTENT_PRESETS = {
         "default": {
             "main_tank": 1, "off_tank_mace": 1, "main_holystaff": 1,
             "blazing_dps": 1, "arctic_dps": 1, "ligt_cl_dps": 1, "sadwo_cl_dps": 1,
-            "weeping": 1, "shapeshifter_crystal": 1, "mistpiecer_dps": 1,
+            "weeping": 1, "stillgaze": 1, "mistpiecer_dps": 1,
         },
         "custom_roles": True,
     },
@@ -315,7 +314,10 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
 
     start_ts = team_data.get("start_timestamp")
     if start_ts:
-        desc_parts.append(f"# ⏰ <t:{int(start_ts)}:t> — <t:{int(start_ts)}:R>")
+        if time_module.time() >= start_ts:
+            desc_parts.append("# ✅ بدأ بالفعل! | Started!")
+        else:
+            desc_parts.append(f"# ⏰ <t:{int(start_ts)}:t> — <t:{int(start_ts)}:R>")
 
     desc_parts.append(f"**{team_data['event_type']}** | Players: **{total_signed}/{total_slots}**")
 
