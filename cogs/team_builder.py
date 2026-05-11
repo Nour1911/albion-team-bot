@@ -151,7 +151,6 @@ class TeamBuilderView(discord.ui.View):
             if limit > 0 and role_key in roles:
                 role_info = roles[role_key]
                 emoji_str = role_info["emoji"]
-                # Try to use emoji, skip if invalid
                 try:
                     button = RoleButton(
                         role_key=role_key,
@@ -173,6 +172,9 @@ class TeamBuilderView(discord.ui.View):
                 self.add_item(button)
 
         self.add_item(LeaveButton(team_data, roles))
+        self.add_item(CloseRegistrationButton(team_data, roles))
+        self.add_item(PingButton(team_data, roles))
+        self.add_item(DuplicateButton(team_data, roles))
 
 
 class RoleButton(discord.ui.Button):
@@ -285,6 +287,96 @@ class LeaveButton(discord.ui.Button):
         )
 
 
+class CloseRegistrationButton(discord.ui.Button):
+    def __init__(self, team_data: dict, roles: dict):
+        super().__init__(style=discord.ButtonStyle.danger, emoji="🔒", label="Close")
+        self.team_data = team_data
+        self.roles = roles
+
+    async def callback(self, interaction: discord.Interaction):
+        is_creator = interaction.user.id == self.team_data["created_by"]
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if not is_creator and not is_admin:
+            await interaction.response.send_message("❌ Only the team creator can close registration!", ephemeral=True)
+            return
+
+        if self.team_data.get("close_timestamp") and time_module.time() >= self.team_data["close_timestamp"]:
+            await interaction.response.send_message("❌ Already closed!", ephemeral=True)
+            return
+
+        self.team_data["close_timestamp"] = time_module.time()
+        await interaction.response.edit_message(
+            embed=build_team_embed(self.team_data, self.roles), view=self.view
+        )
+
+
+class PingButton(discord.ui.Button):
+    def __init__(self, team_data: dict, roles: dict):
+        super().__init__(style=discord.ButtonStyle.primary, emoji="📢", label="Ping")
+        self.team_data = team_data
+        self.roles = roles
+
+    async def callback(self, interaction: discord.Interaction):
+        is_creator = interaction.user.id == self.team_data["created_by"]
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if not is_creator and not is_admin:
+            await interaction.response.send_message("❌ Only the team creator can ping!", ephemeral=True)
+            return
+
+        total_slots = sum(self.team_data["composition"].values())
+        total_signed = sum(len(p) for p in self.team_data["signed"].values())
+        remaining = total_slots - total_signed
+
+        if remaining <= 0:
+            await interaction.response.send_message("✅ Team is already full!", ephemeral=True)
+            return
+
+        open_lines = []
+        for role_key, limit in self.team_data["composition"].items():
+            signed_count = len(self.team_data["signed"].get(role_key, []))
+            if signed_count < limit and role_key in self.roles:
+                open_lines.append(
+                    f"  {self.roles[role_key]['emoji']} **{self.roles[role_key]['name']}** — {limit - signed_count} slot(s) open"
+                )
+
+        msg = f"📢 **{self.team_data['name']}** needs **{remaining}** more player(s)!\n"
+        if open_lines:
+            msg += "\n".join(open_lines) + "\n"
+        msg += "@everyone"
+        await interaction.response.send_message(msg)
+
+
+class DuplicateButton(discord.ui.Button):
+    def __init__(self, team_data: dict, roles: dict):
+        super().__init__(style=discord.ButtonStyle.secondary, emoji="🔁", label="Duplicate")
+        self.team_data = team_data
+        self.roles = roles
+
+    async def callback(self, interaction: discord.Interaction):
+        is_creator = interaction.user.id == self.team_data["created_by"]
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if not is_creator and not is_admin:
+            await interaction.response.send_message("❌ Only the team creator can duplicate!", ephemeral=True)
+            return
+
+        new_team_data = {
+            "name": self.team_data["name"],
+            "event_type": self.team_data["event_type"],
+            "composition": dict(self.team_data["composition"]),
+            "signed": {},
+            "max_players": self.team_data["max_players"],
+            "created_by": interaction.user.id,
+            "close_timestamp": None,
+            "start_timestamp": self.team_data.get("start_timestamp"),
+            "notes": self.team_data.get("notes"),
+        }
+
+        embed = build_team_embed(new_team_data, self.roles)
+        view = TeamBuilderView(new_team_data, self.roles)
+        await interaction.response.send_message("✅ Team duplicated!", ephemeral=True)
+        await interaction.channel.send(content="@everyone", embed=embed, view=view)
+
+
 def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
     """Build the team composition embed."""
     total_slots = sum(team_data["composition"].values())
@@ -320,6 +412,10 @@ def build_team_embed(team_data: dict, roles: dict) -> discord.Embed:
             desc_parts.append(f"# ⏰ <t:{int(start_ts)}:t> — <t:{int(start_ts)}:R>")
 
     desc_parts.append(f"**{team_data['event_type']}** | Players: **{total_signed}/{total_slots}**")
+
+    notes = team_data.get("notes")
+    if notes:
+        desc_parts.append(f"📝 {notes}")
 
     if close_ts:
         if is_closed:
@@ -374,7 +470,7 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
     slot5 = discord.ui.TextInput(label="Role 5 (extra roles: one per line)", placeholder="Support : 1\nScout : 1", default="Support : 1", max_length=200, required=False, style=discord.TextStyle.paragraph)
 
     def __init__(self, team_name: str, content_key: str, guild_id: int, roles: dict,
-                 hours_to_close: float = 0, start_after: float = 0):
+                 hours_to_close: float = 0, start_after: float = 0, notes: str = ""):
         super().__init__()
         self.team_name = team_name
         self.content_key = content_key
@@ -382,6 +478,7 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
         self.all_roles = roles
         self.hours_to_close = hours_to_close
         self.start_after = start_after
+        self.notes = notes
 
         preset = CONTENT_PRESETS.get(content_key, CONTENT_PRESETS["custom"])
         defaults = preset["default"]
@@ -509,6 +606,7 @@ class CompositionModal(discord.ui.Modal, title="⚔️ Team Composition"):
             "created_by": interaction.user.id,
             "close_timestamp": close_timestamp,
             "start_timestamp": start_timestamp,
+            "notes": self.notes or None,
         }
 
         embed = build_team_embed(team_data, role_display)
@@ -590,6 +688,7 @@ class BuilderConfirmButton(discord.ui.Button):
             "created_by": interaction.user.id,
             "close_timestamp": close_timestamp,
             "start_timestamp": start_timestamp,
+            "notes": bv.notes or None,
         }
 
         embed = build_team_embed(team_data, bv.roles)
@@ -667,7 +766,7 @@ class TeamBuilderDropdownView(discord.ui.View):
     """Interactive view with dropdown to build team composition."""
 
     def __init__(self, team_name: str, event_type: str, roles: dict,
-                 start_after: float = 0, close_after: float = 0):
+                 start_after: float = 0, close_after: float = 0, notes: str = ""):
         super().__init__(timeout=300)
         self.team_name = team_name
         self.event_type = event_type
@@ -675,6 +774,7 @@ class TeamBuilderDropdownView(discord.ui.View):
         self.composition = {}
         self.start_after = start_after
         self.close_after = close_after
+        self.notes = notes
 
         self.add_item(WeaponSelect(roles, self))
         self.add_item(BuilderConfirmButton(self))
@@ -799,6 +899,7 @@ class TeamBuilder(commands.Cog):
         content="Content type",
         start_after="Start after X hours (e.g., 1 = 1 hour, 0.5 = 30 min)",
         close_after="Registration closes after X hours",
+        notes="Optional notes shown on the team post (e.g. bring potions, min gear 1300)",
     )
     @app_commands.choices(
         content=[
@@ -814,7 +915,8 @@ class TeamBuilder(commands.Cog):
         ]
     )
     async def build(self, interaction: discord.Interaction, name: str, content: str,
-                    start_after: Optional[float] = None, close_after: Optional[float] = None):
+                    start_after: Optional[float] = None, close_after: Optional[float] = None,
+                    notes: Optional[str] = None):
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["custom"])
 
@@ -824,6 +926,7 @@ class TeamBuilder(commands.Cog):
             roles=roles,
             start_after=start_after or 0,
             close_after=close_after or 0,
+            notes=notes or "",
         )
         embed = builder.build_preview()
         await interaction.response.send_message(embed=embed, view=builder, ephemeral=True)
@@ -975,6 +1078,7 @@ class TeamBuilder(commands.Cog):
         content="Type of content",
         start_after="Start after X hours (e.g., 1 = starts in 1 hour, 0.5 = 30 min)",
         close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
+        notes="Optional notes shown on the team post (e.g. bring potions, min gear 1300)",
     )
     @app_commands.choices(
         content=[
@@ -998,6 +1102,7 @@ class TeamBuilder(commands.Cog):
         content: str,
         start_after: Optional[float] = None,
         close_after: Optional[float] = None,
+        notes: Optional[str] = None,
     ):
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         modal = CompositionModal(
@@ -1007,6 +1112,7 @@ class TeamBuilder(commands.Cog):
             roles=roles,
             hours_to_close=close_after or 0,
             start_after=start_after or 0,
+            notes=notes or "",
         )
         await interaction.response.send_modal(modal)
 
@@ -1016,6 +1122,7 @@ class TeamBuilder(commands.Cog):
         content="Type of content (uses default composition)",
         start_after="Start after X hours (e.g., 1 = 1 hour, 0.5 = 30 min)",
         close_after="Registration closes after X hours (e.g., 1, 2, 0.5)",
+        notes="Optional notes shown on the team post",
     )
     @app_commands.choices(
         content=[
@@ -1028,7 +1135,8 @@ class TeamBuilder(commands.Cog):
         ]
     )
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
-                        start_after: Optional[float] = None, close_after: Optional[float] = None):
+                        start_after: Optional[float] = None, close_after: Optional[float] = None,
+                        notes: Optional[str] = None):
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
 
@@ -1050,6 +1158,7 @@ class TeamBuilder(commands.Cog):
             "created_by": interaction.user.id,
             "close_timestamp": close_timestamp,
             "start_timestamp": start_timestamp,
+            "notes": notes or None,
         }
 
         embed = build_team_embed(team_data, roles)
