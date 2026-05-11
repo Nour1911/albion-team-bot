@@ -48,6 +48,32 @@ async def init_db():
                 UNIQUE(guild_id, role_key)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS voice_settings (
+                guild_id INTEGER PRIMARY KEY,
+                creation_channel_id INTEGER NOT NULL
+            )
+        """)
+        await db.commit()
+
+
+# --- Voice Settings ---
+
+async def get_voice_creation_channel(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT creation_channel_id FROM voice_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+
+async def set_voice_creation_channel(guild_id: int, channel_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO voice_settings (guild_id, creation_channel_id) VALUES (?, ?)",
+            (guild_id, channel_id),
+        )
         await db.commit()
 
 

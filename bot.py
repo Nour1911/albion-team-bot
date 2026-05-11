@@ -97,6 +97,14 @@ async def help_command(interaction: discord.Interaction):
         inline=False,
     )
     embed.add_field(
+        name="🔊 Voice Channels",
+        value=(
+            "`/setup_voice` - Set the channel that creates personal rooms (Admin)\n"
+            "`/voice_status` - Show voice setup info"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="🔧 Other",
         value="`/ping` - Check bot latency\n`/help` - Show this message",
         inline=False,
@@ -107,6 +115,7 @@ async def help_command(interaction: discord.Interaction):
 async def main():
     async with bot:
         await bot.load_extension("cogs.team_builder")
+        await bot.load_extension("cogs.voice_channels")
         await bot.start(TOKEN)
 
 

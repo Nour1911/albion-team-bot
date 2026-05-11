@@ -22,13 +22,14 @@ AVA_RAID_ROLES = {
     "main_tank": {"emoji": "🛡️", "name": "Main TANK", "image": "Main TANK.png"},
     "off_tank_mace": {"emoji": "🔨", "name": "OFF TANK MACE", "image": "OFF_TANK_MACE_.png"},
     "main_holystaff": {"emoji": "✝️", "name": "MAIN HOLYSTAFF", "image": "MAIN_HOLYSTAFF.png"},
-    "blazing_dps": {"emoji": "🔥", "name": "Blazing DPS", "image": "Blazing DPS.png"},
-    "arctic_dps": {"emoji": "❄️", "name": "ARCTIC DPS", "image": "ARCTIC DPS.png"},
-    "ligt_cl_dps": {"emoji": "⚡", "name": "Ligt CL DPS", "image": "Ligt CL DPS.png"},
-    "sadwo_cl_dps": {"emoji": "🌑", "name": "Sadwo CL DPS", "image": "Sadwo CL DPS.png"},
+    "blazing_dps": {"emoji": "🔥", "name": "Blazing", "image": "Blazing DPS.png"},
+    "arctic_dps": {"emoji": "❄️", "name": "Arctic", "image": "ARCTIC DPS.png"},
+    "ligt_cl_dps": {"emoji": "⚡", "name": "Lightcaller", "image": "Ligt CL DPS.png"},
+    "sadwo_cl_dps": {"emoji": "🌑", "name": "Shadowcaller", "image": "Sadwo CL DPS.png"},
     "weeping": {"emoji": "💧", "name": "Weeping", "image": "Weeping.png"},
     "shapeshifter_crystal": {"emoji": "💎", "name": "SHAPESHIFTER CRYSTAL", "image": "_SHAPESHIFTER_CRYSTAL.png"},
-    "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer DPS", "image": "Mistpiecer DPS.png"},
+    "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer", "image": "Mistpiecer DPS.png"},
+    "stillgaze": {"emoji": "👁️", "name": "Stillgaze (PartyHealerSwap)", "image": "Stillgaze.png"},
 }
 
 # Path to AVA RAID emoji images
@@ -615,6 +616,51 @@ class BuilderClearButton(discord.ui.Button):
         await interaction.response.edit_message(embed=embed, view=self.builder_view)
 
 
+class CustomWeaponModal(discord.ui.Modal, title="➕ Add Custom Weapon"):
+    weapon_name = discord.ui.TextInput(
+        label="Weapon Name",
+        placeholder="e.g. Grailseeker, Locus, Bridled Fury...",
+        max_length=50,
+    )
+    count = discord.ui.TextInput(
+        label="Count",
+        placeholder="1",
+        default="1",
+        max_length=2,
+    )
+
+    def __init__(self, builder_view):
+        super().__init__()
+        self.builder_view = builder_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = self.weapon_name.value.strip()
+        try:
+            cnt = max(1, int(self.count.value.strip()))
+        except ValueError:
+            cnt = 1
+
+        key = f"custom_{name.lower().replace(' ', '_')[:20]}"
+        if key in self.builder_view.composition:
+            self.builder_view.composition[key] += cnt
+        else:
+            self.builder_view.composition[key] = cnt
+
+        self.builder_view.roles[key] = {"emoji": "🗡️", "name": name, "description": ""}
+
+        embed = self.builder_view.build_preview()
+        await interaction.response.edit_message(embed=embed, view=self.builder_view)
+
+
+class CustomWeaponButton(discord.ui.Button):
+    def __init__(self, builder_view):
+        super().__init__(style=discord.ButtonStyle.primary, label="✏️ Custom Weapon", row=2)
+        self.builder_view = builder_view
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(CustomWeaponModal(self.builder_view))
+
+
 class TeamBuilderDropdownView(discord.ui.View):
     """Interactive view with dropdown to build team composition."""
 
@@ -631,6 +677,7 @@ class TeamBuilderDropdownView(discord.ui.View):
         self.add_item(WeaponSelect(roles, self))
         self.add_item(BuilderConfirmButton(self))
         self.add_item(BuilderClearButton(self))
+        self.add_item(CustomWeaponButton(self))
 
     def build_preview(self) -> discord.Embed:
         embed = discord.Embed(
