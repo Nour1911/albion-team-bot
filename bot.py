@@ -115,8 +115,14 @@ async def help_command(interaction: discord.Interaction):
 
 async def main():
     async with bot:
-        await bot.load_extension("cogs.team_builder")
-        await bot.load_extension("cogs.voice_channels")
+        for ext in ["cogs.team_builder", "cogs.voice_channels"]:
+            try:
+                await bot.load_extension(ext)
+                print(f"✅ Loaded: {ext}")
+            except Exception as e:
+                print(f"❌ Failed to load {ext}: {e}")
+                import traceback
+                traceback.print_exc()
         await bot.start(TOKEN)
 
 
