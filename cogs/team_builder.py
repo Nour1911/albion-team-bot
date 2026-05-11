@@ -27,7 +27,7 @@ AVA_RAID_ROLES = {
     "ligt_cl_dps": {"emoji": "⚡", "name": "Lightcaller", "image": "Ligt CL DPS.png"},
     "sadwo_cl_dps": {"emoji": "🌑", "name": "Shadowcaller", "image": "Sadwo CL DPS.png"},
     "weeping": {"emoji": "💧", "name": "Weeping", "image": "Weeping.png"},
-    "stillgaze": {"emoji": "👁️", "name": "Stillgaze (PartyHealerSwap)", "image": "Stillgaze.png"},
+    "stillgaze": {"emoji": "💎", "name": "Stillgaze (PartyHealerSwap)", "image": "_SHAPESHIFTER_CRYSTAL.png"},
     "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer", "image": "Mistpiecer DPS.png"},
 }
 
