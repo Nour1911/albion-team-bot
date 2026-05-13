@@ -1,46 +1,46 @@
-import aiosqlite
+import asyncpg
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "bot.db")
+_pool = None
 
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS players (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_id INTEGER UNIQUE NOT NULL,
+    global _pool
+    _pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), ssl="require")
+    async with _pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS albion_players (
+                id SERIAL PRIMARY KEY,
+                discord_id BIGINT UNIQUE NOT NULL,
                 username TEXT NOT NULL,
                 role TEXT DEFAULT 'Flex',
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                joined_at TIMESTAMP DEFAULT NOW()
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS albion_events (
+                id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 event_type TEXT NOT NULL,
                 date_time TEXT NOT NULL,
-                created_by INTEGER NOT NULL,
-                channel_id INTEGER,
-                message_id INTEGER
+                created_by BIGINT NOT NULL,
+                channel_id BIGINT,
+                message_id BIGINT
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS attendance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS albion_attendance (
+                id SERIAL PRIMARY KEY,
                 event_id INTEGER NOT NULL,
-                player_id INTEGER NOT NULL,
+                player_id BIGINT NOT NULL,
                 status TEXT DEFAULT 'pending',
-                FOREIGN KEY (event_id) REFERENCES events(id),
-                FOREIGN KEY (player_id) REFERENCES players(discord_id),
                 UNIQUE(event_id, player_id)
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS custom_roles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                guild_id INTEGER NOT NULL,
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS albion_custom_roles (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
                 role_key TEXT NOT NULL,
                 name TEXT NOT NULL,
                 emoji TEXT NOT NULL,
@@ -48,208 +48,182 @@ async def init_db():
                 UNIQUE(guild_id, role_key)
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS voice_settings (
-                guild_id INTEGER PRIMARY KEY,
-                creation_channel_id INTEGER NOT NULL
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS albion_voice_settings (
+                guild_id BIGINT PRIMARY KEY,
+                creation_channel_id BIGINT NOT NULL
             )
         """)
-        await db.commit()
 
 
 # --- Voice Settings ---
 
 async def get_voice_creation_channel(guild_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT creation_channel_id FROM voice_settings WHERE guild_id = ?", (guild_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT creation_channel_id FROM albion_voice_settings WHERE guild_id = $1",
+            guild_id,
+        )
+        return row["creation_channel_id"] if row else None
 
 
 async def set_voice_creation_channel(guild_id: int, channel_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO voice_settings (guild_id, creation_channel_id) VALUES (?, ?)",
-            (guild_id, channel_id),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO albion_voice_settings (guild_id, creation_channel_id)
+               VALUES ($1, $2)
+               ON CONFLICT (guild_id) DO UPDATE SET creation_channel_id = $2""",
+            guild_id, channel_id,
         )
-        await db.commit()
 
 
 # --- Custom Roles ---
 
 async def add_custom_role(guild_id: int, role_key: str, name: str, emoji: str, description: str = ""):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO custom_roles (guild_id, role_key, name, emoji, description)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(guild_id, role_key) DO UPDATE SET name = ?, emoji = ?, description = ?""",
-            (guild_id, role_key, name, emoji, description, name, emoji, description),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO albion_custom_roles (guild_id, role_key, name, emoji, description)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (guild_id, role_key) DO UPDATE SET name = $3, emoji = $4, description = $5""",
+            guild_id, role_key, name, emoji, description,
         )
-        await db.commit()
 
 
 async def remove_custom_role(guild_id: int, role_key: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "DELETE FROM custom_roles WHERE guild_id = ? AND role_key = ?",
-            (guild_id, role_key),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM albion_custom_roles WHERE guild_id = $1 AND role_key = $2",
+            guild_id, role_key,
         )
-        await db.commit()
 
 
 async def get_custom_roles(guild_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM custom_roles WHERE guild_id = ? ORDER BY id",
-            (guild_id,),
-        ) as cursor:
-            return await cursor.fetchall()
+    async with _pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM albion_custom_roles WHERE guild_id = $1 ORDER BY id",
+            guild_id,
+        )
 
 
 # --- Players ---
 
 async def add_player(discord_id: int, username: str, role: str = "Flex"):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO players (discord_id, username, role) VALUES (?, ?, ?)",
-            (discord_id, username, role),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO albion_players (discord_id, username, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            discord_id, username, role,
         )
-        await db.commit()
 
 
 async def set_player_role(discord_id: int, role: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE players SET role = ? WHERE discord_id = ?",
-            (role, discord_id),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE albion_players SET role = $1 WHERE discord_id = $2",
+            role, discord_id,
         )
-        await db.commit()
 
 
 async def get_player(discord_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
-        ) as cursor:
-            return await cursor.fetchone()
+    async with _pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM albion_players WHERE discord_id = $1", discord_id
+        )
 
 
 async def get_all_players():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM players ORDER BY role") as cursor:
-            return await cursor.fetchall()
+    async with _pool.acquire() as conn:
+        return await conn.fetch("SELECT * FROM albion_players ORDER BY role")
 
 
 # --- Events ---
 
 async def create_event(name: str, event_type: str, date_time: str, created_by: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "INSERT INTO events (name, event_type, date_time, created_by) VALUES (?, ?, ?, ?)",
-            (name, event_type, date_time, created_by),
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO albion_events (name, event_type, date_time, created_by) VALUES ($1, $2, $3, $4) RETURNING id",
+            name, event_type, date_time, created_by,
         )
-        await db.commit()
-        return cursor.lastrowid
+        return row["id"]
 
 
 async def update_event_message(event_id: int, channel_id: int, message_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE events SET channel_id = ?, message_id = ? WHERE id = ?",
-            (channel_id, message_id, event_id),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE albion_events SET channel_id = $1, message_id = $2 WHERE id = $3",
+            channel_id, message_id, event_id,
         )
-        await db.commit()
 
 
 async def get_event(event_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM events WHERE id = ?", (event_id,)
-        ) as cursor:
-            return await cursor.fetchone()
+    async with _pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM albion_events WHERE id = $1", event_id
+        )
 
 
 async def get_upcoming_events():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM events WHERE date_time >= datetime('now') ORDER BY date_time"
-        ) as cursor:
-            return await cursor.fetchall()
+    async with _pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM albion_events WHERE date_time >= NOW()::text ORDER BY date_time"
+        )
 
 
 async def get_all_events():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM events ORDER BY date_time DESC"
-        ) as cursor:
-            return await cursor.fetchall()
+    async with _pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM albion_events ORDER BY date_time DESC"
+        )
 
 
 async def delete_event(event_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM attendance WHERE event_id = ?", (event_id,))
-        await db.execute("DELETE FROM events WHERE id = ?", (event_id,))
-        await db.commit()
+    async with _pool.acquire() as conn:
+        await conn.execute("DELETE FROM albion_attendance WHERE event_id = $1", event_id)
+        await conn.execute("DELETE FROM albion_events WHERE id = $1", event_id)
 
 
 # --- Attendance ---
 
 async def set_attendance(event_id: int, player_id: int, status: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO attendance (event_id, player_id, status)
-               VALUES (?, ?, ?)
-               ON CONFLICT(event_id, player_id) DO UPDATE SET status = ?""",
-            (event_id, player_id, status, status),
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO albion_attendance (event_id, player_id, status)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (event_id, player_id) DO UPDATE SET status = $3""",
+            event_id, player_id, status,
         )
-        await db.commit()
 
 
 async def get_event_attendance(event_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            """SELECT a.*, p.username, p.role FROM attendance a
-               JOIN players p ON a.player_id = p.discord_id
-               WHERE a.event_id = ?""",
-            (event_id,),
-        ) as cursor:
-            return await cursor.fetchall()
+    async with _pool.acquire() as conn:
+        return await conn.fetch(
+            """SELECT a.*, p.username, p.role FROM albion_attendance a
+               JOIN albion_players p ON a.player_id = p.discord_id
+               WHERE a.event_id = $1""",
+            event_id,
+        )
 
 
 async def get_player_stats(discord_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
+    async with _pool.acquire() as conn:
+        return await conn.fetchrow(
             """SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present,
                 SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent
-               FROM attendance WHERE player_id = ?""",
-            (discord_id,),
-        ) as cursor:
-            return await cursor.fetchone()
+               FROM albion_attendance WHERE player_id = $1""",
+            discord_id,
+        )
 
 
 async def get_all_player_stats():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
+    async with _pool.acquire() as conn:
+        return await conn.fetch(
             """SELECT p.username, p.role,
                 COUNT(a.id) as total,
                 SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present,
                 SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent
-               FROM players p
-               LEFT JOIN attendance a ON p.discord_id = a.player_id
-               GROUP BY p.discord_id
+               FROM albion_players p
+               LEFT JOIN albion_attendance a ON p.discord_id = a.player_id
+               GROUP BY p.discord_id, p.username, p.role
                ORDER BY present DESC"""
-        ) as cursor:
-            return await cursor.fetchall()
+        )
