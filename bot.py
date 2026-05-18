@@ -1,5 +1,7 @@
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -113,6 +115,21 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def run_health_server():
+    port = int(os.getenv("PORT", 8080))
+    HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
+
+
 async def main():
     async with bot:
         for ext in ["cogs.team_builder", "cogs.voice_channels"]:
@@ -127,4 +144,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    threading.Thread(target=run_health_server, daemon=True).start()
     asyncio.run(main())
