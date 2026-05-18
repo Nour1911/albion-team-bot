@@ -29,6 +29,7 @@ AVA_RAID_ROLES = {
     "weeping": {"emoji": "💧", "name": "Weeping", "image": "Weeping.png"},
     "stillgaze": {"emoji": "💎", "name": "Stillgaze (PartyHealerSwap)", "image": "_SHAPESHIFTER_CRYSTAL.png"},
     "mistpiecer_dps": {"emoji": "🌀", "name": "Mistpiecer", "image": "Mistpiecer DPS.png"},
+    "crystal_rpr": {"emoji": "💎", "name": "CRYSTAL RPR", "image": "crystal_rpr.png"},
 }
 
 # Path to AVA RAID emoji images
