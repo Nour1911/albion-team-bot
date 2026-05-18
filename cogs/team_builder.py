@@ -91,6 +91,11 @@ CONTENT_PRESETS = {
         },
         "custom_roles": True,
     },
+    "tracking": {
+        "name": "🎯 Tracking",
+        "max_players": 10,
+        "default": {"tank": 1, "healer": 1, "dps_melee": 1, "dps_ranged": 1, "scout": 0},
+    },
     "custom": {
         "name": "📌 Custom",
         "max_players": 20,
@@ -915,6 +920,7 @@ class TeamBuilder(commands.Cog):
             app_commands.Choice(name="🗡️ Ganking", value="ganking"),
             app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
             app_commands.Choice(name="💀 HCE", value="hce"),
+            app_commands.Choice(name="🎯 Tracking", value="tracking"),
             app_commands.Choice(name="📌 Custom", value="custom"),
         ]
     )
@@ -1098,6 +1104,7 @@ class TeamBuilder(commands.Cog):
             app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
             app_commands.Choice(name="💀 HCE", value="hce"),
             app_commands.Choice(name="🎯 Arena / Crystal", value="arena"),
+            app_commands.Choice(name="🎯 Tracking", value="tracking"),
             app_commands.Choice(name="📌 Custom", value="custom"),
         ]
     )
@@ -1138,6 +1145,7 @@ class TeamBuilder(commands.Cog):
             app_commands.Choice(name="⭐ Fame Farm", value="fame_farm"),
             app_commands.Choice(name="🗡️ Ganking", value="ganking"),
             app_commands.Choice(name="🏚️ Dungeon", value="dungeon"),
+            app_commands.Choice(name="🎯 Tracking", value="tracking"),
         ]
     )
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
