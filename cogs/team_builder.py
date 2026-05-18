@@ -111,7 +111,10 @@ async def get_guild_roles(guild_id: int, content_key: str = None) -> dict:
     for key, info in AVA_RAID_ROLES.items():
         roles[key] = {"emoji": info["emoji"], "name": info["name"], "description": ""}
     # Override with guild custom roles from DB
-    custom = await db.get_custom_roles(guild_id)
+    try:
+        custom = await db.get_custom_roles(guild_id)
+    except Exception:
+        custom = []
     for r in custom:
         roles[r["role_key"]] = {
             "emoji": r["emoji"],
@@ -928,7 +931,11 @@ class TeamBuilder(commands.Cog):
                     start_after: Optional[float] = None, close_after: Optional[float] = None,
                     notes: Optional[str] = None):
         await interaction.response.defer(ephemeral=True)
-        roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
+        try:
+            roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+            return
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["custom"])
 
         builder = TeamBuilderDropdownView(
