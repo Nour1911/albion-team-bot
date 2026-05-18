@@ -819,6 +819,7 @@ class TeamBuilder(commands.Cog):
     )
     @app_commands.checks.has_permissions(manage_guild=True)
     async def role_add(self, interaction: discord.Interaction, key: str, name: str, emoji: str, description: str = ""):
+        await interaction.response.defer()
         key = key.lower().replace(" ", "_")
         await db.add_custom_role(interaction.guild_id, key, name, emoji, description)
 
@@ -828,21 +829,23 @@ class TeamBuilder(commands.Cog):
             color=discord.Color.green(),
         )
         embed.set_footer(text="This role will now appear in /createteam")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @role_mgmt.command(name="remove", description="➖ Remove a custom role")
     @app_commands.describe(key="The role key to remove")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def role_remove(self, interaction: discord.Interaction, key: str):
+        await interaction.response.defer()
         key = key.lower().replace(" ", "_")
         if key in DEFAULT_ROLES:
-            await interaction.response.send_message("❌ Can't remove default roles! You can rename them with `/role add` using the same key.", ephemeral=True)
+            await interaction.followup.send("❌ Can't remove default roles! You can rename them with `/role add` using the same key.", ephemeral=True)
             return
         await db.remove_custom_role(interaction.guild_id, key)
-        await interaction.response.send_message(f"🗑️ Role `{key}` removed!")
+        await interaction.followup.send(f"🗑️ Role `{key}` removed!")
 
     @role_mgmt.command(name="list", description="📋 Show all available roles")
     async def role_list(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
 
         embed = discord.Embed(title="📋 Available Roles", color=discord.Color.blue())
@@ -869,7 +872,7 @@ class TeamBuilder(commands.Cog):
             embed.add_field(name="Custom Roles", value=custom_text, inline=False)
 
         embed.set_footer(text="✏️ = customized | Use /role add to add/edit, /role remove to delete")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @role_mgmt.command(name="emoji", description="🎨 Change emoji for a role")
     @app_commands.describe(
@@ -878,10 +881,11 @@ class TeamBuilder(commands.Cog):
     )
     @app_commands.checks.has_permissions(manage_guild=True)
     async def role_emoji(self, interaction: discord.Interaction, key: str, emoji: str):
+        await interaction.response.defer()
         key = key.lower().replace(" ", "_")
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         if key not in roles:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Role `{key}` not found!\nAvailable: {', '.join(f'`{k}`' for k in roles.keys())}",
                 ephemeral=True,
             )
@@ -889,7 +893,7 @@ class TeamBuilder(commands.Cog):
 
         role_info = roles[key]
         await db.add_custom_role(interaction.guild_id, key, role_info["name"], emoji, role_info.get("description", ""))
-        await interaction.response.send_message(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
+        await interaction.followup.send(f"✅ Emoji for **{role_info['name']}** changed to {emoji}")
 
     # --- Build (Dropdown) ---
 
@@ -917,6 +921,7 @@ class TeamBuilder(commands.Cog):
     async def build(self, interaction: discord.Interaction, name: str, content: str,
                     start_after: Optional[float] = None, close_after: Optional[float] = None,
                     notes: Optional[str] = None):
+        await interaction.response.defer(ephemeral=True)
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["custom"])
 
@@ -929,7 +934,7 @@ class TeamBuilder(commands.Cog):
             notes=notes or "",
         )
         embed = builder.build_preview()
-        await interaction.response.send_message(embed=embed, view=builder, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=builder)
 
     # --- Emoji Upload ---
 
@@ -1032,12 +1037,13 @@ class TeamBuilder(commands.Cog):
                        content: str = "custom", count: int = 1,
                        start_after: Optional[float] = None, close_after: Optional[float] = None):
         """Create a quick team with a single weapon/role."""
+        await interaction.response.defer()
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
         weapon_key = weapon.lower().replace(" ", "_")
 
         if weapon_key not in roles:
             available = ", ".join(f"`{k}`" for k in list(AVA_RAID_ROLES.keys()) + list(DEFAULT_ROLES.keys()))
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Weapon `{weapon}` not found!\n\nAvailable codes:\n{available}\n\nUse `/weapons` to see all.",
                 ephemeral=True,
             )
@@ -1068,7 +1074,7 @@ class TeamBuilder(commands.Cog):
         role_display = {weapon_key: roles[weapon_key]}
         embed = build_team_embed(team_data, role_display)
         view = TeamBuilderView(team_data, role_display)
-        await interaction.response.send_message(content="@everyone", embed=embed, view=view)
+        await interaction.followup.send(content="@everyone", embed=embed, view=view)
 
     # --- Team Commands ---
 
@@ -1137,6 +1143,7 @@ class TeamBuilder(commands.Cog):
     async def quickteam(self, interaction: discord.Interaction, name: str, content: str,
                         start_after: Optional[float] = None, close_after: Optional[float] = None,
                         notes: Optional[str] = None):
+        await interaction.response.defer()
         preset = CONTENT_PRESETS.get(content, CONTENT_PRESETS["ava_road"])
         roles = await get_roles_with_emojis(interaction.guild, interaction.guild_id)
 
@@ -1163,7 +1170,7 @@ class TeamBuilder(commands.Cog):
 
         embed = build_team_embed(team_data, roles)
         view = TeamBuilderView(team_data, roles)
-        await interaction.response.send_message(content="@everyone", embed=embed, view=view)
+        await interaction.followup.send(content="@everyone", embed=embed, view=view)
 
 
 async def setup(bot):
