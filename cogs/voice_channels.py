@@ -87,7 +87,12 @@ class VoiceChannels(commands.Cog):
     @app_commands.describe(channel="Voice channel users join to get their own personal channel")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_voice(self, interaction: discord.Interaction, channel: discord.VoiceChannel):
-        await db.set_voice_creation_channel(interaction.guild_id, channel.id)
+        await interaction.response.defer()
+        try:
+            await db.set_voice_creation_channel(interaction.guild_id, channel.id)
+        except Exception as e:
+            await interaction.followup.send(f"❌ DB Error: {e}", ephemeral=True)
+            return
         embed = discord.Embed(
             title="✅ Voice Setup Done!",
             description=(
@@ -99,13 +104,17 @@ class VoiceChannels(commands.Cog):
             ),
             color=discord.Color.green(),
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="voice_status", description="🔊 Show current voice channel setup")
     async def voice_status(self, interaction: discord.Interaction):
-        ch_id = await db.get_voice_creation_channel(interaction.guild_id)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            ch_id = await db.get_voice_creation_channel(interaction.guild_id)
+        except Exception:
+            ch_id = None
         if not ch_id:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ No voice creation channel set. Use `/setup_voice` first.", ephemeral=True
             )
             return
@@ -116,7 +125,7 @@ class VoiceChannels(commands.Cog):
         embed = discord.Embed(title="🔊 Voice Channel Status", color=discord.Color.blue())
         embed.add_field(name="Creation Channel", value=ch_mention, inline=False)
         embed.add_field(name="Active Personal Channels", value=str(len(self.user_channels)), inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot):

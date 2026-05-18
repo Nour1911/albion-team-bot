@@ -6,7 +6,9 @@ _pool = None
 
 async def init_db():
     global _pool
-    _pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), ssl="require")
+    db_url = os.getenv("DATABASE_URL", "")
+    ssl = "require" if "supabase" in db_url else None
+    _pool = await asyncpg.create_pool(db_url, ssl=ssl)
     async with _pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS albion_players (
