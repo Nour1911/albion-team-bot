@@ -652,15 +652,13 @@ class WeaponSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         selected_key = self.values[0]
-        role_info = self.roles.get(selected_key, AVA_RAID_ROLES.get(selected_key, DEFAULT_ROLES.get(selected_key)))
 
-        # Add to composition
         if selected_key in self.builder_view.composition:
             self.builder_view.composition[selected_key] += 1
         else:
             self.builder_view.composition[selected_key] = 1
 
-        # Update embed
+        self.builder_view.refresh_items()
         embed = self.builder_view.build_preview()
         await interaction.response.edit_message(embed=embed, view=self.builder_view)
 
@@ -722,6 +720,44 @@ class BuilderClearButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         self.builder_view.composition = {}
+        self.builder_view.refresh_items()
+        embed = self.builder_view.build_preview()
+        await interaction.response.edit_message(embed=embed, view=self.builder_view)
+
+
+class RemoveWeaponSelect(discord.ui.Select):
+    """Dropdown to remove a weapon from the composition."""
+
+    def __init__(self, composition: dict, roles: dict, builder_view):
+        options = []
+        for key, count in composition.items():
+            role_info = roles.get(key, {"emoji": "🎮", "name": key})
+            emoji_str = role_info.get("emoji", "🎮")
+            try:
+                options.append(discord.SelectOption(
+                    label=f"{role_info['name']} (x{count})",
+                    value=key,
+                    emoji=emoji_str if len(emoji_str) <= 2 else None,
+                    description="اضغط لتشيل واحدة",
+                ))
+            except Exception:
+                options.append(discord.SelectOption(
+                    label=f"{role_info['name']} (x{count})",
+                    value=key,
+                    description="اضغط لتشيل واحدة",
+                ))
+        super().__init__(placeholder="❌ شيل سلاح...", options=options, min_values=1, max_values=1, row=1)
+        self.roles = roles
+        self.builder_view = builder_view
+
+    async def callback(self, interaction: discord.Interaction):
+        key = self.values[0]
+        if key in self.builder_view.composition:
+            if self.builder_view.composition[key] > 1:
+                self.builder_view.composition[key] -= 1
+            else:
+                del self.builder_view.composition[key]
+        self.builder_view.refresh_items()
         embed = self.builder_view.build_preview()
         await interaction.response.edit_message(embed=embed, view=self.builder_view)
 
@@ -758,6 +794,7 @@ class CustomWeaponModal(discord.ui.Modal, title="➕ Add Custom Weapon"):
 
         self.builder_view.roles[key] = {"emoji": "🗡️", "name": name, "description": ""}
 
+        self.builder_view.refresh_items()
         embed = self.builder_view.build_preview()
         await interaction.response.edit_message(embed=embed, view=self.builder_view)
 
@@ -785,7 +822,13 @@ class TeamBuilderDropdownView(discord.ui.View):
         self.close_after = close_after
         self.notes = notes
 
-        self.add_item(WeaponSelect(roles, self))
+        self.refresh_items()
+
+    def refresh_items(self):
+        self.clear_items()
+        self.add_item(WeaponSelect(self.roles, self))
+        if self.composition:
+            self.add_item(RemoveWeaponSelect(self.composition, self.roles, self))
         self.add_item(BuilderConfirmButton(self))
         self.add_item(BuilderClearButton(self))
         self.add_item(CustomWeaponButton(self))
