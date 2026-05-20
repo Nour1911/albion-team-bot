@@ -651,16 +651,22 @@ class WeaponSelect(discord.ui.Select):
         self.builder_view = builder_view
 
     async def callback(self, interaction: discord.Interaction):
-        selected_key = self.values[0]
+        try:
+            selected_key = self.values[0]
 
-        if selected_key in self.builder_view.composition:
-            self.builder_view.composition[selected_key] += 1
-        else:
-            self.builder_view.composition[selected_key] = 1
+            if selected_key in self.builder_view.composition:
+                self.builder_view.composition[selected_key] += 1
+            else:
+                self.builder_view.composition[selected_key] = 1
 
-        self.builder_view.refresh_items()
-        embed = self.builder_view.build_preview()
-        await interaction.response.edit_message(embed=embed, view=self.builder_view)
+            self.builder_view.refresh_items()
+            embed = self.builder_view.build_preview()
+            await interaction.response.edit_message(embed=embed, view=self.builder_view)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(f"❌ حصل خطأ، جرب تعمل `/build` من الأول.\n`{e}`", ephemeral=True)
+            except Exception:
+                pass
 
 
 class BuilderConfirmButton(discord.ui.Button):
@@ -751,15 +757,21 @@ class RemoveWeaponSelect(discord.ui.Select):
         self.builder_view = builder_view
 
     async def callback(self, interaction: discord.Interaction):
-        key = self.values[0]
-        if key in self.builder_view.composition:
-            if self.builder_view.composition[key] > 1:
-                self.builder_view.composition[key] -= 1
-            else:
-                del self.builder_view.composition[key]
-        self.builder_view.refresh_items()
-        embed = self.builder_view.build_preview()
-        await interaction.response.edit_message(embed=embed, view=self.builder_view)
+        try:
+            key = self.values[0]
+            if key in self.builder_view.composition:
+                if self.builder_view.composition[key] > 1:
+                    self.builder_view.composition[key] -= 1
+                else:
+                    del self.builder_view.composition[key]
+            self.builder_view.refresh_items()
+            embed = self.builder_view.build_preview()
+            await interaction.response.edit_message(embed=embed, view=self.builder_view)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(f"❌ حصل خطأ، جرب تعمل `/build` من الأول.\n`{e}`", ephemeral=True)
+            except Exception:
+                pass
 
 
 class CustomWeaponModal(discord.ui.Modal, title="➕ Add Custom Weapon"):
@@ -813,7 +825,7 @@ class TeamBuilderDropdownView(discord.ui.View):
 
     def __init__(self, team_name: str, event_type: str, roles: dict,
                  start_after: float = 0, close_after: float = 0, notes: str = ""):
-        super().__init__(timeout=300)
+        super().__init__(timeout=840)
         self.team_name = team_name
         self.event_type = event_type
         self.roles = roles
