@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -6,6 +7,11 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import database as db
+
+# Fix emoji printing on Windows terminals with non-UTF-8 encoding
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 load_dotenv()
 
@@ -100,6 +106,11 @@ async def help_command(interaction: discord.Interaction):
         inline=False,
     )
     embed.add_field(
+        name="📋 Comp Sign-Up",
+        value="`/postcomp` - Post AVA comp sheet with sign-up for each role",
+        inline=False,
+    )
+    embed.add_field(
         name="🔊 Voice Channels",
         value=(
             "`/setup_voice` - Set the channel that creates personal rooms (Admin)\n"
@@ -132,7 +143,7 @@ def run_health_server():
 
 async def main():
     async with bot:
-        for ext in ["cogs.team_builder", "cogs.voice_channels"]:
+        for ext in ["cogs.team_builder", "cogs.voice_channels", "cogs.comp_post"]:
             try:
                 await bot.load_extension(ext)
                 print(f"✅ Loaded: {ext}")
